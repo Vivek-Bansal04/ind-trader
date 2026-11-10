@@ -33,6 +33,14 @@ class NseIndiaApiProvider:
 
         return importlib.util.find_spec("nse") is not None
 
+    def client(self):
+        """Open the underlying NSE client (new-generation library) with the
+        download_folder ritual handled — the doc probes and CLI paths use this
+        instead of repeating the constructor call (live crashes came from that)."""
+        from nse import NSE
+
+        return NSE(download_folder=self.download_folder)
+
     def daily(self, symbol: str, start: str, end: str) -> pd.DataFrame:
         from nse import NSE  # lazy: keeps import optional
 

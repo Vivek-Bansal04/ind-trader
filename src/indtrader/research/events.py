@@ -44,7 +44,8 @@ def fetch_results_calendar(store: BarStore, nse_obj=None) -> dict:
     if nse_obj is None:
         try:
             from nse import NSE
-            nse_obj = NSE()
+            import tempfile
+            nse_obj = NSE(download_folder=tempfile.mkdtemp(prefix="nse_events_"))
         except ImportError:
             try:
                 from NseIndiaApi import NseIndia

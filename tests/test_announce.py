@@ -30,10 +30,31 @@ def test_store_and_holdings_only_filter(tmp_path):
     s.close()
 
 
-def test_no_lib_reports_instead_of_faking(tmp_path):
+def test_no_lib_reports_instead_of_faking(tmp_path, monkeypatch):
+    # deterministic NO-LIB path whether or not nse is installed (macOS laptop run
+    # proved the installed-lib path; see test_probe_path_finds_announcements_method)
+    import sys
+
+    monkeypatch.setitem(sys.modules, "nse", None)
+    monkeypatch.setitem(sys.modules, "NseIndiaApi", None)
     s = BarStore(tmp_path / "b.sqlite")
-    res = announce.fetch_announcements(["TATA"], s)   # neither nse lib installed here
+    res = announce.fetch_announcements(["TATA"], s)
     assert res["ok"] is False and "NseIndiaApi not installed" in res["error"]
+    s.close()
+
+
+def test_probe_path_finds_announcements_method(tmp_path):
+    """The probe pattern with a stand-in lib shaped like NseIndiaApi>=6 (whose live
+    'announcements' method the laptop session confirmed, 2026-11-10)."""
+    class FakeNSE6:
+        def announcements(self, symbol):
+            return [{"ANN_DATE": "2026-11-08", "ANN_DESC": "Forensic audit appointed"}]
+
+    s = BarStore(tmp_path / "b.sqlite")
+    res = announce.fetch_announcements(["TATA"], s, nse_obj=FakeNSE6())
+    assert res["ok"] and res["method"] == "announcements" and res["stored"] == 1
+    m = announce.triaged_recent(s, ["TATA"], days=365 * 5)
+    assert m and m[0].severity == "RED" and m[0].symbol == "TATA"
     s.close()
 
 
