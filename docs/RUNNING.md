@@ -7,7 +7,7 @@ Everything persistent is in the **`data/` folder**, nothing else:
 | File | What it holds | Format |
 |---|---|---|
 | `data/bars.sqlite` | All daily OHLCV candles for the universe (the single source of truth), plus ingest audit trail. Also holds the `delivery_pct` and `deals` evidence tables | SQLite |
-| `data/plans.sqlite` | Signal log + order plans with mandatory rationale + status | SQLite |
+| `data/plans.sqlite` | Signal log + order plans with mandatory rationale + status + `ledger` (actual fills for the tax engine) | SQLite |
 | `data/universe.sample.txt` | Example watchlist: `SYMBOL<TAB>Sector` per line | text, git-tracked |
 
 `.env` (copy of `.env.example`) holds secrets — **never commit it** (already git-ignored).
@@ -65,8 +65,9 @@ Upserts are idempotent, so a missed night self-heals the next evening.
    (`planlog.add_plan`) with entry/stop/target/rationale.
 5. You place the CNC order manually at next morning's open (VRO or broker GTT/limit).
    The system never touches your broker.
-6. After executing: mark the plan `executed` in the journal; `cli reconcile` compares
-   journal vs Fyers holdings (read-only) and flags anything unexplained.
+6. After executing: `cli fill SYM BUY/SELL qty px --costs ...` records the actual fill
+   (tax ledger); `cli reconcile` compares journal vs Fyers holdings (read-only) and
+   flags anything unexplained. `cli tax` prints FY-wise realized gains + CGT estimate.
 
 ## Office laptop caveat (this machine)
 

@@ -210,6 +210,43 @@ def cmd_reconcile(args) -> int:
     return 0
 
 
+def cmd_fill(args) -> int:
+    from datetime import date as _date
+
+    from indtrader.execution.planlog import PlanLog
+
+    when = args.date or _date.today().isoformat()
+    log = PlanLog()
+    fid = log.add_fill(when, args.symbol, args.side, args.qty, args.price, args.costs, args.note)
+    log.close()
+    print(f"ledger fill #{fid}: {args.side} {args.qty} {args.symbol.upper()} @ {args.price} on {args.date}")
+    return 0
+
+
+def cmd_tax(args) -> int:
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio.tax import realize, tax_summary
+
+    log = PlanLog()
+    entries = log.fills()
+    log.close()
+    if not entries:
+        print("ledger empty — record actual fills with: indtrader fill SYM BUY 100 1400 --date 2026-01-15")
+        return 0
+    matches = realize(entries)
+    open_pos = {}
+    for m_e in entries:  # reopen books just to show what's still held
+        open_pos[m_e.symbol.upper()] = open_pos.get(m_e.symbol.upper(), 0) + (m_e.qty if m_e.side.upper() == "BUY" else -m_e.qty)
+    print(f"{len(entries)} fills -> {len(matches)} realized lots")
+    for fy in tax_summary(matches):
+        for line in fy.lines():
+            print(line)
+    held = {s: q for s, q in sorted(open_pos.items()) if q > 0}
+    print("still held:", held if held else "nothing")
+    print("computation only — verify with your CA before filing.")
+    return 0
+
+
 def cmd_ai(args) -> int:
     from indtrader.ai.prompts import build_prompt
     from indtrader.ai.router import build_router
@@ -264,6 +301,17 @@ def main(argv=None) -> int:
     s = sub.add_parser("reconcile")
     s.add_argument("--report-only", action="store_true", help="print only, never send Telegram")
     s.set_defaults(fn=cmd_reconcile)
+    s = sub.add_parser("fill", help="record an actual executed fill into the tax ledger")
+    s.add_argument("symbol")
+    s.add_argument("side", choices=["BUY", "SELL"])
+    s.add_argument("qty", type=int)
+    s.add_argument("price", type=float)
+    s.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
+    s.add_argument("--costs", type=float, default=0.0, help="all-in costs of this fill (STT/stamp/GST...)")
+    s.add_argument("--note", default="")
+    s.set_defaults(fn=cmd_fill)
+    s = sub.add_parser("tax", help="FIFO realized P&L + CGT estimate per financial year")
+    s.set_defaults(fn=cmd_tax)
     s = sub.add_parser("universe")
     s.add_argument("--index", default="nifty 50")
     s.add_argument("--out", default="data/universe.txt")

@@ -20,6 +20,8 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `fetch-feeds` | Nightly evidence refresh: delivery-% bhavcopy + bulk deals (NSE; keeps last-known when unreachable) |
 | `notify` | Evening briefing (regime + shortlist): sends to Telegram when configured, prints otherwise |
 | `reconcile` | Journal vs broker holdings (Fyers read-only token): reports mismatches, never acts on them |
+| `fill SYM SIDE QTY PX --costs N` | Record an actual fill into the tax ledger |
+| `tax` | FIFO realized P&L + CGT estimate per FY (20%/12.5%, ₹1.25L LTCG exemption; computation only) |
 | `universe --index "nifty 50" --out data/universe.txt` | Dump live index constituents to a universe file |
 | `regime` | Market traffic-light (breadth + index trend) → recommended exposure 100/60/30% |
 | `ai SYM` | Optional AI view. Works keyless (deterministic factpack); add any model key later |
@@ -98,8 +100,9 @@ strictly, can be rejected, and can never size or place a trade.
 
 ## Status & roadmap
 
-Implemented: data chain + store, costs, backtester + 6 strategies, RRG, regime,
-sizing/limits/XIRR, journal, ETL+Docker, AI router.
-Next (see `../build-plan.md`): scanner (Phase 2), delivery-% and PIT/bulk-deal feeds,
-broker read-only adapters + holdings reconciliation (Phase 1 tail), tax ledger, Telegram
-alerts.
+Implemented: data chain + store, costs, backtester + 6 strategies, RRG, regime, scanner,
+evidence feeds (delivery/bulk deals), sizing/limits, journal, tax ledger (FIFO + CGT),
+Fyers read-only reconciliation, Telegram briefings, ETL+Docker, AI router.
+Next (see `../build-plan.md`): loss set-off/carry-forward in the tax engine, portfolio-
+level concurrent backtest, Angel One read-only adapter, shareholding/fundamentals feeds,
+XIRR wiring for the mutual-fund leg (mftool vendor).

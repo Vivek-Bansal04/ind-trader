@@ -19,12 +19,21 @@ CREATE TABLE IF NOT EXISTS plans(
     entry REAL, stop REAL, target REAL, reason TEXT, setup TEXT,
     status TEXT DEFAULT 'open'  -- open|executed|cancelled|stale
 );
+CREATE TABLE IF NOT EXISTS ledger(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dt TEXT, symbol TEXT, side TEXT,  -- BUY | SELL (actual fills, not plans)
+    qty INT, price REAL, costs REAL DEFAULT 0, note TEXT
+);
 """
 
 
 class PlanLog:
     def __init__(self, path: Path | None = None):
-        self.path = Path(path) if path else Path("data/plans.sqlite")
+        if path is None:
+            from indtrader.config import get_settings
+
+            path = get_settings().data_dir / "plans.sqlite"
+        self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.con = sqlite3.connect(str(self.path))
         self.con.executescript(SCHEMA)
@@ -59,6 +68,23 @@ class PlanLog:
 
     def open_plans(self):
         return self.con.execute("SELECT * FROM plans WHERE status='open' ORDER BY created").fetchall()
+
+    def add_fill(self, dt, symbol: str, side: str, qty: int, price: float,
+                 costs: float = 0.0, note: str = "") -> int:
+        cur = self.con.execute(
+            "INSERT INTO ledger(dt,symbol,side,qty,price,costs,note) VALUES (?,?,?,?,?,?,?)",
+            (str(dt), symbol.upper(), side.upper(), int(qty), float(price), float(costs), note),
+        )
+        self.con.commit()
+        return int(cur.lastrowid)
+
+    def fills(self):
+        rows = self.con.execute(
+            "SELECT dt,symbol,side,qty,price,costs FROM ledger ORDER BY dt, id"
+        ).fetchall()
+        from indtrader.portfolio.tax import LedgerEntry
+        return [LedgerEntry(date.fromisoformat(str(r[0])[:10]), r[1], r[2], int(r[3]), float(r[4]), float(r[5]))
+                for r in rows]
 
     def executed_positions(self) -> dict[str, int]:
         """Net quantity per symbol implied by EXECUTED plans (BUY +, SELL -).
