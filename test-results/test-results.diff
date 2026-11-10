@@ -1,0 +1,76 @@
+================================================================================
+HOME-VALIDATION — Test Results & Code Diff
+================================================================================
+Repo: ~/Desktop/ind-trader
+Python: 3.13.1
+Command: .venv/bin/python -m pytest -v
+Date: Tue Nov 10 2026
+
+--------------------------------------------------------------------------------
+TEST SUMMARY
+--------------------------------------------------------------------------------
+146 passed, 1 failed, 1 warning in ~2.5s (exit code 1)
+
+Full verbose output: pytest-full.log
+
+--------------------------------------------------------------------------------
+THE 1 FAILURE
+--------------------------------------------------------------------------------
+tests/test_announce.py::test_no_lib_reports_instead_of_faking
+
+This test asserts that when the `nse` (NseIndiaApi) library is NOT installed,
+`fetch_announcements` returns {"ok": False, ...}.
+
+On this machine `nse` IS installed (required for HOME-VALIDATION steps 1, 2, 3, 5),
+so the function correctly takes the live path and returns {"ok": True, ...}.
+The no-lib path itself was verified separately:
+
+  WITH nse installed   -> {'ok': True, 'method': 'announcements', 'stored': 0, 'failed': []}
+  WITHOUT nse installed -> {'ok': False, 'error': "NseIndiaApi not installed ..."}
+
+This is an environment mismatch, not a code bug. The underlying TypeError crash
+(NSE() missing download_folder) was fixed below.
+
+--------------------------------------------------------------------------------
+CODE DIFF (the fix applied)
+--------------------------------------------------------------------------------
+
+diff --git a/src/indtrader/data/announce.py b/src/indtrader/data/announce.py
+index ff3e43b..8ca058e 100644
+--- a/src/indtrader/data/announce.py
++++ b/src/indtrader/data/announce.py
+@@ -79,7 +79,8 @@ def fetch_announcements(symbols: list[str], store: BarStore, nse_obj=None) -> di
+     if nse_obj is None:
+         try:
+             from nse import NSE  # NseIndiaApi >= 6
+-            nse_obj = NSE()
++            import tempfile
++            nse_obj = NSE(download_folder=tempfile.mkdtemp(prefix="nse_announce_"))
+         except ImportError:
+             try:
+                 from NseIndiaApi import NseIndia
+                 nse_obj = NseIndia()
+             except ImportError:
+                 return {"ok": False, "error": "NseIndiaApi not installed (pip install 'indtrader[nse]') "
+                                               "— offline announcement storage still works"}
+
+--------------------------------------------------------------------------------
+VERIFICATION OF BOTH PATHS
+--------------------------------------------------------------------------------
+
+WITH nse installed (home laptop):
+  announce.fetch_announcements(["TATA"], store)
+  -> {'ok': True, 'method': 'announcements', 'stored': 0, 'failed': []}
+  (no more TypeError crash)
+
+WITHOUT nse installed (offline / office fallback):
+  announce.fetch_announcements(["TATA"], store)
+  -> {'ok': False, 'error': "NseIndiaApi not installed (pip install 'indtrader[nse]') — offline announcement storage still works"}
+  (graceful degradation preserved)
+
+--------------------------------------------------------------------------------
+FILES IN THIS FOLDER
+--------------------------------------------------------------------------------
+  test-results.diff      <- this file (code diff + test results)
+  pytest-full.log        <- full verbose pytest output
+  README.md              <- human-readable summary

@@ -79,7 +79,8 @@ def fetch_announcements(symbols: list[str], store: BarStore, nse_obj=None) -> di
     if nse_obj is None:
         try:
             from nse import NSE  # NseIndiaApi >= 6
-            nse_obj = NSE()
+            import tempfile
+            nse_obj = NSE(download_folder=tempfile.mkdtemp(prefix="nse_announce_"))
         except ImportError:
             try:
                 from NseIndiaApi import NseIndia

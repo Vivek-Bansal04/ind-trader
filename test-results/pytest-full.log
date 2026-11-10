@@ -1,0 +1,62 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.13.1, pytest-9.2.0, pluggy-1.7.0
+rootdir: /Users/vivek/Desktop/ind-trader
+configfile: pyproject.toml
+testpaths: tests
+plugins: platformdirs-4.14.5, anyio-4.16.0
+collected 147 items
+
+tests/test_adj_factors.py ....                                           [  2%]
+tests/test_ai_router.py ......                                           [  6%]
+tests/test_alerts.py .......                                             [ 11%]
+tests/test_announce.py ..F.                                              [ 14%]
+tests/test_broker.py .....                                               [ 17%]
+tests/test_calendar.py ...                                               [ 19%]
+tests/test_costs.py ....                                                 [ 22%]
+tests/test_engine.py ....                                                [ 25%]
+tests/test_etl.py ....                                                   [ 27%]
+tests/test_evals.py .......                                              [ 32%]
+tests/test_events.py ...                                                 [ 34%]
+tests/test_feeds.py ......                                               [ 38%]
+tests/test_freshness.py ....                                             [ 41%]
+tests/test_ftd.py ......                                                 [ 45%]
+tests/test_health.py ..                                                  [ 46%]
+tests/test_limits.py ....                                                [ 49%]
+tests/test_montecarlo.py ....                                            [ 52%]
+tests/test_portfolio_engine.py .....                                     [ 55%]
+tests/test_review.py ...                                                 [ 57%]
+tests/test_riskreport.py .                                               [ 58%]
+tests/test_rrg.py ....                                                   [ 61%]
+tests/test_scanner.py ..........                                         [ 68%]
+tests/test_sizing.py ......                                              [ 72%]
+tests/test_store.py ....                                                 [ 74%]
+tests/test_ta.py .......                                                 [ 79%]
+tests/test_tax.py .......                                                [ 84%]
+tests/test_tax_setoff.py .....                                           [ 87%]
+tests/test_validate.py ..                                                [ 89%]
+tests/test_valuation.py ....                                             [ 91%]
+tests/test_walkforward.py ....                                           [ 94%]
+tests/test_weights.py ....                                               [ 97%]
+tests/test_xirr.py ....                                                  [100%]
+
+=================================== FAILURES ===================================
+____________________ test_no_lib_reports_instead_of_faking _____________________
+
+tmp_path = PosixPath('/private/var/folders/2x/g91s8qcs4nb6tzd19jm11z080000gn/T/pytest-of-vivek/pytest-9/test_no_lib_reports_instead_of0')
+
+    def test_no_lib_reports_instead_of_faking(tmp_path):
+        s = BarStore(tmp_path / "b.sqlite")
+        res = announce.fetch_announcements(["TATA"], s)   # neither nse lib installed here
+>       assert res["ok"] is False and "NseIndiaApi not installed" in res["error"]
+E       assert (True is False)
+
+tests/test_announce.py:36: AssertionError
+=============================== warnings summary ===============================
+tests/test_ta.py::test_resample_weekly_drops_partial
+  /Users/vivek/Desktop/ind-trader/.venv/lib/python3.13/site-packages/pandas/core/resample.py:2359: DeprecationWarning: The 'generic' unit for NumPy timedelta is deprecated, and will raise an error in the future. This includes implicit conversion of bare integers (e.g. `+ 1`). Please use a specific unit instead.
+    + Timedelta(days=1, unit=edges_dti.unit).as_unit(edges_dti.unit)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_announce.py::test_no_lib_reports_instead_of_faking - assert...
+=================== 1 failed, 146 passed, 1 warning in 2.45s ===================
