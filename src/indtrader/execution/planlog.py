@@ -73,8 +73,8 @@ class PlanLog:
                  costs: float = 0.0, note: str = "") -> int:
         cur = self.con.execute(
             "INSERT INTO ledger(dt,symbol,side,qty,price,costs,note) VALUES (?,?,?,?,?,?,?)",
-            (str(dt), symbol.upper(), side.upper(), int(qty), float(price), float(costs), note),
-        )
+            (str(dt), symbol.upper(), side.upper(), float(qty), float(price), float(costs), note),
+        )  # qty is float-safe: MF units are fractional (equity fills are whole anyway)
         self.con.commit()
         return int(cur.lastrowid)
 
@@ -83,7 +83,7 @@ class PlanLog:
             "SELECT dt,symbol,side,qty,price,costs FROM ledger ORDER BY dt, id"
         ).fetchall()
         from indtrader.portfolio.tax import LedgerEntry
-        return [LedgerEntry(date.fromisoformat(str(r[0])[:10]), r[1], r[2], int(r[3]), float(r[4]), float(r[5]))
+        return [LedgerEntry(date.fromisoformat(str(r[0])[:10]), r[1], r[2], float(r[3]), float(r[4]), float(r[5]))
                 for r in rows]
 
     def executed_positions(self) -> dict[str, int]:

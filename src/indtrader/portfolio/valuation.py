@@ -28,6 +28,22 @@ def held_quantities(fills) -> dict[str, int]:
     return {s: v for s, v in q.items() if v != 0}
 
 
+def resolve_marks(store, symbols, equity_col: str = "close") -> dict:
+    """symbol -> last value, or None when unknown (never a guess). MF: symbols price
+    from stored NAVs; everything else from its candles — wrong source is worse than
+    no source."""
+    from indtrader.portfolio.mf import is_mf, mf_mark
+
+    out = {}
+    for sym in symbols:
+        if is_mf(sym):
+            out[sym] = mf_mark(store, sym)
+            continue
+        df = store.load(sym)
+        out[sym] = float(df[equity_col].iloc[-1]) if not df.empty else None
+    return out
+
+
 def book_xirr(fills, last_close: dict[str, float | None], asof: date | None = None) -> dict:
     asof = asof or date.today()
     flows = book_flows(fills)

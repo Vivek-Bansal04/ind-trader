@@ -46,10 +46,8 @@ def build_weekly_review(settings=None, scan_rows: int = 10) -> str:
         # 2. book vs plan
         fills = log.fills()
         held = held_quantities(fills)
-        marks = {}
-        for sym in held:
-            df = store.load(sym)
-            marks[sym] = float(df["close"].iloc[-1]) if not df.empty else None
+        from indtrader.portfolio.valuation import resolve_marks
+        marks = resolve_marks(store, held)
         rep = book_xirr(fills, marks)
         L.append("## Book")
         if not fills:

@@ -29,6 +29,11 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `montecarlo SYMBOL --strategy X` | Bootstrap the costed trade PnLs → p5/p50/p95 outcomes, P(loss), worst-5% drawdown; refuses under 20 trades |
 | `weights [SYMS] --method inverse_vol\|hrp` | Risk-balanced weights, capped per symbol; HRP via PyPortfolioOpt with honest auto-fallback |
 | `xirr` | Money-weighted return of the actual fills ledger at current marks; refuses on missing marks |
+| `mf-navs` | Store latest MF NAVs from AMFI's NAVAll.txt (live-verified header contract; 0-silent-misparse by design) — works from any network that reaches amfiindia.com, office included |
+| `mf [text]` | No arg: MF slice of the book at stored NAVs; with text: scheme search by name |
+| `fill-mf CODE SIDE UNITS NAV [--date]` | Record one SIP instalment/redemption — fractional units, NAV-priced (ledger rows carry the MF: prefix) |
+| `sips` | SIP aggregation (units, invested, value, gain%) + XIRR of the MF slice; refuses on missing NAVs |
+| `rebalance --file targets.json` | Monthly rebalance proposals vs target weights with the tax lens on every sell; unknown marks size 0, never guessed; proposals only |
 | `riskreport` | Weekly report: regime light + flip/FTD note, book XIRR + concentration, journal counts, universe data health |
 | `health` | Data-health gate vs the NIFTY session calendar: rows, gaps, staleness, adj coverage; exit 1 on breaches |
 | `fetch-adj` | Store corporate-action factors (yfinance Adj Close/Close); `backtest --adjusted` uses them, warns on RAW fallback |
@@ -129,5 +134,10 @@ evals, falsifier field), freshness CI.
 Phases 1–3 of the plan are code-complete; the live-data half (Nifty-500 backfill, bhavcopy
 contract test, 10y walk-forward runs) is gated on docs/HOME-VALIDATION.md — this network
 blocks NSE/Yahoo. Phase 4 (paper loop, 6–8 weeks) starts from that same checklist.
+Phase 6 (investing leg) started early as allowed by the plan ("parallel from wk 9"): the
+MF NAV layer is BUILT AND LIVE-VERIFIED — AMFI is reachable even from the blocked office
+network (14,445 NAVs stored, contract-probe green, 2026-11-10). Phase 5 stays gated on
+Phase 4 passing, per plan; its buildable surface already exists (read-only reconcile,
+journal, sizing).
 Next: the laptop session (HOME-VALIDATION §1–§4), then the Phase-4 clock; deferred backlog:
 screener.in fundamentals (where the endpoint is verifiable), dashboard UI.

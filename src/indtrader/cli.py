@@ -245,6 +245,176 @@ def cmd_notify(args) -> int:
     return 0 if sent else 1
 
 
+def cmd_mf_navs(args) -> int:
+    from indtrader.portfolio import mf
+
+    store = BarStore()
+    try:
+        out = mf.fetch_navs(store)
+        if out.get("ok"):
+            print(f"stored {out['stored']} NAVs dated {out['nav_date']} "
+                  f"({out['dropped_malformed']} malformed lines dropped)")
+            return 0
+        print(f"mf-navs failed: {out['error']}", file=sys.stderr)
+        return 1
+    finally:
+        store.close()
+
+
+def cmd_mf(args) -> int:
+    """No args: MF slice of the book at stored NAVs. With text: scheme search."""
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio import mf
+    from indtrader.portfolio.valuation import held_quantities, resolve_marks
+
+    store, log = BarStore(), PlanLog()
+    try:
+        if args.query:
+            hits = mf.resolve_scheme(store, args.query[0])
+            if not hits:
+                print("no stored scheme matches — run mf-navs first (needs network), or refine the text")
+                return 1
+            for code, name in hits:
+                print(f"MF:{code}  {name}")
+            print("record instalments with: fill-mf <code> BUY <units> <nav>")
+            return 0
+        fills = [f for f in log.fills() if mf.is_mf(f.symbol)]
+        if not fills:
+            print("no MF flows yet — record SIP instalments with: fill-mf <scheme-code> BUY <units> <nav>")
+            return 0
+        held = held_quantities(fills)
+        marks = resolve_marks(store, held)
+        rows = []
+        for sym, q in sorted(held.items()):
+            nav = marks.get(sym)
+            rows.append({"symbol": sym, "units": round(q, 4), "nav": nav,
+                         "value": round(q * nav, 2) if nav else None})
+        print(pd.DataFrame(rows).to_string(index=False))
+        missing = [s for s, v in marks.items() if v is None]
+        if missing:
+            print("NAV missing (run mf-navs):", ", ".join(missing))
+        return 0
+    finally:
+        store.close()
+        log.close()
+
+
+def cmd_fill_mf(args) -> int:
+    """One SIP instalment / redemption: fractional units, NAV from statement or AMFI."""
+    from datetime import date as _date
+
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio import mf
+
+    side = args.side.upper()
+    if side not in ("BUY", "SELL"):
+        print("side must be BUY or SELL", file=sys.stderr)
+        return 1
+    if args.units <= 0 or args.nav <= 0 or args.costs < 0:
+        print("units and nav must be positive, costs non-negative", file=sys.stderr)
+        return 1
+    dt = _date.fromisoformat(args.date) if args.date else _date.today()
+    log = PlanLog()
+    try:
+        code = args.symbol if str(args.symbol).isdigit() else str(args.symbol)
+        fid = log.add_fill(dt, mf.MF_PREFIX + code, side, args.units, args.nav,
+                           args.costs, args.note or ("sip via cli" if side == "BUY" else "redeem via cli"))
+        print(f"recorded fill #{fid}: {side} {args.units} units MF:{code} @ NAV {args.nav:g} on {dt}")
+        return 0
+    finally:
+        log.close()
+
+
+def cmd_sips(args) -> int:
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio import mf
+    from indtrader.portfolio.valuation import book_xirr, resolve_marks
+
+    store, log = BarStore(), PlanLog()
+    try:
+        flows = mf.mf_flows(log.fills())
+        if not flows:
+            print("no SIP flows yet — record instalments with fill-mf (or via the /fill bot command)")
+            return 0
+        agg: dict[str, dict] = {}
+        for f in flows:
+            a = agg.setdefault(f.symbol, {"units": 0.0, "invested": 0.0, "redeemed": 0.0, "n": 0})
+            a["n"] += 1
+            if f.side.upper() == "BUY":
+                a["units"] += f.qty
+                a["invested"] += f.qty * f.price + f.costs
+            else:
+                a["units"] -= f.qty
+                a["redeemed"] += f.qty * f.price - f.costs
+        marks = resolve_marks(store, agg)
+        rows = []
+        for sym, a in sorted(agg.items()):
+            nav = marks.get(sym)
+            rows.append({"symbol": sym, "fills": a["n"], "units": round(a["units"], 3),
+                         "invested": round(a["invested"], 0), "redeemed": round(a["redeemed"], 0),
+                         "value": round(a["units"] * nav, 0) if nav else None,
+                         "gain%": (round((a["redeemed"] + (a["units"] * nav)) / a["invested"] - 1, 4)
+                                   if nav and a["invested"] else None)})
+        print(pd.DataFrame(rows).to_string(index=False))
+        out = book_xirr(flows, marks)
+        print(json.dumps(out, indent=1))
+        return 0 if out["ok"] else 1
+    finally:
+        store.close()
+        log.close()
+
+
+def cmd_rebalance(args) -> int:
+    import json as _json
+    from pathlib import Path
+
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio.rebalance import rebalance_plan
+    from indtrader.portfolio.valuation import held_quantities, resolve_marks
+
+    try:
+        targets = _json.loads(Path(args.file).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(f"targets file unreadable ({args.file}): {e}", file=sys.stderr)
+        return 1
+    if not isinstance(targets, dict) or not targets:
+        print("targets file must be a JSON object {symbol: weight}", file=sys.stderr)
+        return 1
+    try:
+        tw = {str(k).upper(): float(v) for k, v in targets.items()}
+    except (TypeError, ValueError):
+        print("every target weight must be a number", file=sys.stderr)
+        return 1
+    if any(v < 0 or v > 1 for v in tw.values()) or sum(tw.values()) > 1.0 + 1e-9:
+        print(f"weights must be in [0,1] and sum <= 1 (residual = cash); got sum={sum(tw.values()):.3f} — refusing",
+              file=sys.stderr)
+        return 1
+    store, log = BarStore(), PlanLog()
+    try:
+        held = held_quantities(log.fills())
+        marks = resolve_marks(store, sorted(set(held) | set(tw)))
+        closes = {s: store.load(s)["close"].tolist() for s in held if not mf_is(s) and not store.load(s).empty}
+        plan = rebalance_plan(held, marks, tw, closes=closes, tol=args.tol)
+        if not plan:
+            print("book is within tolerance of every target — nothing to do")
+        for t in plan:
+            px = "unknown" if t.price is None else f"{t.price:,.2f}"
+            qty = "-" if t.qty == 0 else f"{t.qty:,.4f}"
+            print(f"{t.action:5s} {t.symbol:24s} qty {qty:>12s} @ {px:>10s} "
+                  f"~{t.est_value:,.0f}  {t.note}")
+        print("proposals only — human-confirmed execution is the standing rule")
+        return 0
+    finally:
+        store.close()
+        log.close()
+
+
+def mf_is(sym: str) -> bool:
+    from indtrader.portfolio.mf import is_mf
+
+    return is_mf(sym)
+
+
 def cmd_bot(args) -> int:
     from indtrader.alerts.commands import poll_loop
 
@@ -614,6 +784,26 @@ def main(argv=None) -> int:
     s.set_defaults(fn=cmd_pause)
     s = sub.add_parser("resume", help="undo pause")
     s.set_defaults(fn=cmd_resume)
+    s = sub.add_parser("mf-navs", help="fetch + store latest MF NAVs from AMFI (contract-checked)")
+    s.set_defaults(fn=cmd_mf_navs)
+    s = sub.add_parser("mf", help="MF slice of the book at stored NAVs; or scheme search with a text arg")
+    s.add_argument("query", nargs="*")
+    s.set_defaults(fn=cmd_mf)
+    s = sub.add_parser("fill-mf", help="record one SIP instalment/redemption (fractional units, NAV-priced)")
+    s.add_argument("symbol", help="AMFI scheme code (or MF:-prefixed)")
+    s.add_argument("side", help="BUY | SELL")
+    s.add_argument("units", type=float)
+    s.add_argument("nav", type=float)
+    s.add_argument("--date", default=None, help="YYYY-MM-DD (default today)")
+    s.add_argument("--costs", type=float, default=0.0)
+    s.add_argument("--note", default="")
+    s.set_defaults(fn=cmd_fill_mf)
+    s = sub.add_parser("sips", help="SIP aggregation + money-weighted return of the MF slice")
+    s.set_defaults(fn=cmd_sips)
+    s = sub.add_parser("rebalance", help="monthly rebalance proposals + tax lens (targets JSON: {SYM: weight})")
+    s.add_argument("--file", required=True)
+    s.add_argument("--tol", type=float, default=0.02, help="no-trade band as fraction of total")
+    s.set_defaults(fn=cmd_rebalance)
     s = sub.add_parser("reconcile")
     s.add_argument("--report-only", action="store_true", help="print only, never send Telegram")
     s.set_defaults(fn=cmd_reconcile)

@@ -129,15 +129,12 @@ def _status(argv, s):
 
 
 def _book_line(store, log) -> str:
-    from indtrader.portfolio.valuation import book_xirr, held_quantities
+    from indtrader.portfolio.valuation import book_xirr, held_quantities, resolve_marks
 
     fills = log.fills()
     if not fills:
         return "Book: no fills yet"
-    marks = {}
-    for sym in held_quantities(fills):
-        df = store.load(sym)
-        marks[sym] = float(df["close"].iloc[-1]) if not df.empty else None
+    marks = resolve_marks(store, held_quantities(fills))
     rep = book_xirr(fills, marks)
     if not rep["ok"]:
         return f"Book: XIRR unavailable — {rep['reason']}"
@@ -158,9 +155,11 @@ def _book(argv, s):
         if not held:
             return "Book is empty (no fills recorded)"
         lines = [_book_line(store, log)]
+        from indtrader.portfolio.valuation import resolve_marks
+
+        marks = resolve_marks(store, sorted(held))
         for sym, q in sorted(held.items()):
-            df = store.load(sym)
-            px = float(df["close"].iloc[-1]) if not df.empty else None
+            px = marks.get(sym)
             lines.append(f"{sym} {q} @ {_fmt(px)}")
         return "\n".join(lines)
     finally:

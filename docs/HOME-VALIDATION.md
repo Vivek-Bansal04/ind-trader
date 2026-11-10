@@ -9,6 +9,10 @@ Legend: **[READY]** = command exists at the commit you're on · **[PROBE]** = ex
 just capture the output · **[PENDING CODE]** = will be a real command in a later push;
 skip if it doesn't exist yet.
 
+> Update 2026-11-10: **AMFI (MF NAVs) is reachable from the office too** — the Phase-6
+> MF layer (`mf-navs`) was already live-verified here (14,445 NAVs, contract green).
+> Nothing in this checklist depends on it; it stays for the NSE/Yahoo items only.
+
 ---
 
 ## 0. Setup (one time)
