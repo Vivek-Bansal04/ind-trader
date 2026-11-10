@@ -23,6 +23,13 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `fill SYM SIDE QTY PX --costs N` | Record an actual fill into the tax ledger |
 | `tax` | FIFO realized P&L + CGT estimate per FY (20%/12.5%, ₹1.25L LTCG exemption; computation only) |
 | `pbacktest [SYMS] --strategy X` | Portfolio-level backtest: shared cash, concurrent positions, regime-scaled exposure |
+| `gate SYMBOL --param period=150,200,250` | Walk-forward + parameter-plateau GATE (OOS/IS ratio, IS floor, plateau): exit 2 = strategy fails, net of costs |
+| `montecarlo SYMBOL --strategy X` | Bootstrap the costed trade PnLs → p5/p50/p95 outcomes, P(loss), worst-5% drawdown; refuses under 20 trades |
+| `weights [SYMS] --method inverse_vol\|hrp` | Risk-balanced weights, capped per symbol; HRP via PyPortfolioOpt with honest auto-fallback |
+| `xirr` | Money-weighted return of the actual fills ledger at current marks; refuses on missing marks |
+| `riskreport` | Weekly report: regime light + flip/FTD note, book XIRR + concentration, journal counts, universe data health |
+| `health` | Data-health gate vs the NIFTY session calendar: rows, gaps, staleness, adj coverage; exit 1 on breaches |
+| `fetch-adj` | Store corporate-action factors (yfinance Adj Close/Close); `backtest --adjusted` uses them, warns on RAW fallback |
 | `universe --index "nifty 50" --out data/universe.txt` | Dump live index constituents to a universe file |
 | `regime` | Market traffic-light (breadth + index trend) → recommended exposure 100/60/30%, plus the exact levels that would flip the light and the follow-through (FTD) status |
 | `ai SYM` | Optional AI view. Works keyless (deterministic factpack); add any model key later |
@@ -103,10 +110,14 @@ strictly, can be rejected, and can never size or place a trade.
 ## Status & roadmap
 
 Implemented: data chain + store, costs, backtester + 6 strategies, portfolio-level backtest,
-RRG, regime (+ flip levels, + FTD internals), scanner (+ pre-signal liquidity floor, +
-compression base), evidence feeds (delivery/bulk deals), sizing/limits, journal, tax ledger
-(FIFO + CGT), Fyers read-only reconciliation, Telegram briefings, ETL+Docker, AI router (+
-grounding rules, contract evals, falsifier field), freshness CI.
-Next (see `../build-plan.md`): loss set-off/carry-forward in the tax engine, Angel One
-read-only adapter, fundamentals feed (screener.in design — build it where the endpoint can
-be inspected first), weekly support-band experiments in research/ before any gating use.
+walk-forward + plateau GATE, Monte Carlo bootstrap, RRG, regime (+ flip levels, + FTD
+internals), scanner (+ pre-signal liquidity floor, + compression base), evidence feeds
+(delivery/bulk deals), session calendar + health gate, corporate-action adj factors,
+sizing/limits, journal, tax ledger (FIFO + CGT), book XIRR from the fills ledger,
+risk-balanced weights (inverse-vol + HRP w/ fallback), weekly risk report, Fyers read-only
+reconciliation, Telegram briefings, ETL+Docker, AI router (+ grounding rules, contract
+evals, falsifier field), freshness CI.
+Phases 1–3 of the plan are code-complete; the live-data half (Nifty-500 backfill, bhavcopy
+contract test, 10y walk-forward runs) is gated on docs/HOME-VALIDATION.md — this network
+blocks NSE/Yahoo. Phase 4 (paper loop, 6–8 weeks) starts from that same checklist.
+Next: announcement triage on holdings, Sunday review generator, loss set-off/carry-forward.

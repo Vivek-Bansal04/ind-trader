@@ -124,11 +124,23 @@ for m in ms:
 
 `ANSWER 5:` ______
 
-## 6. pypfopt on this stack [READY, optional] — likely already proven (it imports on the office box)
+## 6. pypfopt on this stack [READY] — FOUND BROKEN on the office box (2026-11-10)
+
+`pypfopt 1.6.0` + current scipy: `HRPOpt.optimize()` dies on
+`scipy.cluster.hierarchy has no attribute '_LINKAGE_METHODS'`. The code now catches
+this and falls back to inverse_vol with a loud message, so nothing is blocked — but
+if HRP is actually wanted, test whether an older combo works on the laptop:
 
 ```powershell
-.venv\Scripts\python.exe -c "from pypfopt import HRPOpt; from pypfopt.risk_models import risk_matrix; print('pypfopt OK')"
+.venv\Scripts\python.exe -c "from pypfopt import HRPOpt; from pypfopt.risk_models import risk_matrix; print('pypfopt import OK')"
+.venv\Scripts\python.exe -c "
+import numpy as np, pandas as pd
+from pypfopt import HRPOpt
+r = pd.DataFrame(np.random.default_rng(1).normal(0, .02, (300, 4)), columns=list('ABCD'))
+print(HRPOpt(r).optimize())"   # if this throws _LINKAGE_METHODS, HRP is dead on this scipy
 ```
+If dead: try `python -m pip install 'scipy<1.15'` in a scratch venv or pin PyPortfolioOpt
+to a build matching installed scipy, and report which combination actually runs.
 
 `ANSWER 6:` ______
 

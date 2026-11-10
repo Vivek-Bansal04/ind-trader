@@ -376,6 +376,61 @@ def cmd_montecarlo(args) -> int:
     return 0 if out.get("ok") else 1
 
 
+def cmd_weights(args) -> int:
+    from indtrader.portfolio.weights import weights
+
+    store = BarStore()
+    prices = {}
+    for sym in args.symbols or load_universe(args.file):
+        df = _load_or_fetch(store, sym)
+        if df.empty:
+            print(f"[weights] no data for {sym} — refusing to size on unknown", file=sys.stderr)
+            return 1
+        prices[sym.upper()] = df["close"]
+    try:
+        w, used = weights(prices, method=args.method, max_w=args.max_w)
+    except (ValueError, ImportError) as e:
+        print(f"[weights] {e}", file=sys.stderr)
+        return 1
+    for k, v in sorted(w.items(), key=lambda kv: -kv[1]):
+        print(f"{k:14s} {v:7.4f}")
+    print(f"{'CASH(residual)':14s} {max(round(1 - sum(w.values()), 4), 0.0):7.4f}  method={used}")
+    return 0
+
+
+def cmd_xirr(args) -> int:
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio.valuation import book_xirr, held_quantities
+
+    store, log = BarStore(), PlanLog()
+    try:
+        fills = log.fills()
+        last = {}
+        for sym in held_quantities(fills):
+            df = store.load(sym)
+            last[sym] = float(df["close"].iloc[-1]) if not df.empty else None
+        out = book_xirr(fills, last)
+        print(json.dumps(out, indent=1))
+        return 0 if out["ok"] else 1
+    finally:
+        store.close()
+        log.close()
+
+
+def cmd_riskreport(args) -> int:
+    from indtrader.alerts.riskreport import build_weekly_risk_report
+    from indtrader.alerts.telegram import send
+    from indtrader.config import get_settings
+
+    text = build_weekly_risk_report()
+    print(text)
+    s = get_settings()
+    if not args.no_telegram and s.telegram_bot_token.strip() and s.telegram_chat_id.strip():
+        ok, why = send(text, s)
+        print(f"[riskreport] telegram {'sent' if ok else 'not sent'}: {why}")
+    return 0
+
+
 def cmd_ai(args) -> int:
     from indtrader.ai.prompts import build_prompt
     from indtrader.ai.router import build_router
@@ -478,6 +533,17 @@ def main(argv=None) -> int:
     s.add_argument("--capital", type=float, default=1_000_000.0)
     s.add_argument("--seed", type=int, default=12345)
     s.set_defaults(fn=cmd_montecarlo)
+    s = sub.add_parser("weights", help="risk-balanced portfolio weights (inverse_vol | hrp)")
+    s.add_argument("symbols", nargs="*")
+    s.add_argument("--file", default=None)
+    s.add_argument("--method", default="inverse_vol", choices=["inverse_vol", "hrp"])
+    s.add_argument("--max-w", dest="max_w", type=float, default=0.25)
+    s.set_defaults(fn=cmd_weights)
+    s = sub.add_parser("xirr", help="money-weighted return of the actual fills ledger")
+    s.set_defaults(fn=cmd_xirr)
+    s = sub.add_parser("riskreport", help="weekly risk report: regime, book, journal, data health")
+    s.add_argument("--no-telegram", action="store_true")
+    s.set_defaults(fn=cmd_riskreport)
     s = sub.add_parser("universe")
     s.add_argument("--index", default="nifty 50")
     s.add_argument("--out", default="data/universe.txt")

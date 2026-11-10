@@ -21,6 +21,9 @@ dependencies = [
 dev = ["pytest>=8"]
 # NSE as primary data source (GPL library kept as an arm's-length dependency):
 nse = ["NseIndiaApi>=5"]
+# HRP portfolio weights; when the lib-vs-scipy combo is broken, weights auto-fall
+# back to inverse_vol with a loud message (see docs/HOME-VALIDATION.md item 6):
+opt = ["PyPortfolioOpt>=1.5.5"]
 
 [project.scripts]
 indtrader = "indtrader.cli:main"
