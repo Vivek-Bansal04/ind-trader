@@ -65,7 +65,8 @@ def add_action(log, dt: date, symbol: str, kind: str, qty_delta: float = 0.0,
     if kind in ("dividend", "redemption") and cash <= 0:
         raise ValueError(f"{kind} needs the cash actually received")
     if kind == "redemption" and qty_delta <= 0:
-        raise ValueError("redemption needs qty_delta = units redeemed (record the ledger SELL too)")
+        raise ValueError("redemption needs qty_delta = units redeemed "
+                         "(the SELL is synthesized from this action — do NOT record a fill too)")
     log.con.executescript(ACTIONS_SCHEMA)
     cur = log.con.execute(
         "INSERT INTO actions(dt,symbol,kind,qty_delta,cash,tds,note) VALUES (?,?,?,?,?,?,?)",

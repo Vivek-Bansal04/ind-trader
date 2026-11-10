@@ -128,51 +128,51 @@ $ .venv/bin/python -m indtrader.cli health
 health needs 'NIFTY' bars in store first (run fetch-universe on a normal network)
 ```
 
-## 3. Bhavcopy contract probe [PROBE — endpoint shape unknown from the office]
+## 3. Bhavcopy contract probe [PROBE — round 1 learned the shape, round 2 finishes it]
 
 The Phase-1 acceptance gate cross-checks our store's closes against NSE's own
-bhavcopy — but nobody has SEEN this endpoint's response shape from here. This probe
-finds the method and prints the real column contract instead of letting me guess it.
-Run after §2 (so the store has rows to compare).
+bhavcopy. **Round 1 (2026-11-10, answer below) established:** the installed `nse.NSE`
+exposes `equity_bhavcopy(date)` (also `delivery_/fno_/indices_/pr_bhavcopy`, all
+requiring a `datetime.date`) and it returns a **saved CSV path**, not a DataFrame —
+and the price cross-check passed 10/10 on liquid symbols. The one missing fact is the
+**column contract**, which `contract-test` will be coded against. Round-2 probe:
 
 ```bash
 .venv/bin/python -c "
+from datetime import date, timedelta
 from indtrader.data.store import BarStore
 from indtrader.data.nseapi_provider import NseIndiaApiProvider
 n = NseIndiaApiProvider().client()
-print('nse lib:', type(n).__module__, type(n).__name__)
-meth = [m for m in dir(n) if 'bhav' in m.lower() or 'margin' in m.lower() or 'holiday' in m.lower() or 'scrip' in m.lower()]
-print('relevant methods:', meth)
-df = None
-for m in meth:
-    if 'bhav' not in m.lower(): continue
-    try:
-        df = getattr(n, m)()
-        print('called', m, '-> shape', getattr(df, 'shape', type(df).__name__)); break
-    except Exception as e:
-        print('tried', m, '->', type(e).__name__, str(e)[:160])
-if df is not None and hasattr(df, 'columns'):
-    cols = {c.upper(): c for c in df.columns}
-    symc = next((cols[k] for k in ('SYMBOL',) if k in cols), None)
-    px = next((cols[k] for k in ('CLOSE', 'LCLOSE') if k in cols), None)
-    cls = next((cols[k] for k in ('SECURITIES_CLASS', 'SECURITY_CLASS') if k in cols), None)
-    print('columns:', list(df.columns)[:25])
-    if symc and px:
-        eq = df[df[cls].astype(str).str.startswith('E')] if cls else df
-        s = BarStore()
-        for _, r in eq.sample(min(5, len(eq)), random_state=1).iterrows():
-            c = s.load(str(r[symc])).close
-            print(r[symc], 'bhav', r[px], 'store', float(c.iloc[-1]) if len(c) else None)
-    else:
-        print('column contract unknown — paste the columns line above; do not let me guess it')
+d = date.today() - timedelta(days=1)
+if d.weekday() > 4:
+    d -= timedelta(days=d.weekday() - 4)
+raw = n.equity_bhavcopy(d)
+print('method ok | returned:', type(raw).__name__, '| date:', d)
+import pandas as pd
+df = raw if hasattr(raw, 'columns') else pd.read_csv(str(raw))
+print('file:', raw, '| shape:', getattr(df, 'shape', '?'))
+print('columns:', list(df.columns))
+cols = {c.upper().strip(): c for c in df.columns}
+symc = next((cols[k] for k in ('SYMBOL',) if k in cols), None)
+px = next((cols[k] for k in ('CLOSE', 'LCLOSE') if k in cols), None)
+cls = next((cols[k] for k in ('SECURITIES_CLASS', 'SECURITY_CLASS') if k in cols), None)
+print('mapped -> symbol:', symc, '| close:', px, '| class:', cls)
+if symc and px:
+    eq = df[df[cls].astype(str).str.startswith('E')] if cls else df
+    s = BarStore()
+    for _, r in eq.sample(min(10, len(eq)), random_state=1).iterrows():
+        c = s.load(str(r[symc])).close
+        print(r[symc], 'bhav', r[px], 'store', float(c.iloc[-1]) if len(c) else None)
+else:
+    print('column contract unknown — paste the columns line above; do not let me guess it')
 "
 ```
 
-If every bhav method errors, the printed `relevant methods:` line alone answers what
-the adapter must call — paste it.
+If `equity_bhavcopy(d)` errors on a weekday, retry the previous weekday and note it —
+that answers the same-day availability rule too.
 
 ```
-ANSWER 3:
+ANSWER 3 (round 1 — method + 10/10 match, columns still missing):
 nse lib: nse.NSE NSE
 relevant methods: ['HOLIDAY_CLEARING', 'HOLIDAY_TRADING', 'delivery_bhavcopy', 'equity_bhavcopy', 'fno_bhavcopy', 'get_detailed_scrip_data', 'holidays', 'indices_bhavcopy', 'pr_bhavcopy']
 tried delivery_bhavcopy -> TypeError NSE.delivery_bhavcopy() missing 1 required positional argument: 'date'
@@ -191,8 +191,34 @@ ICICIBANK bhav=1589.0 store=1589.0 last=2026-11-09
 ## 4. yfinance Adjusted Close shape [PROBE — Yahoo unreachable from the office]
 
 Decides how `adj_factors` is built (the store's corporate-action adjustment layer
-currently only takes identity factors from this machine). SBIN had a 1:2 split in
-March 2024 — a known correct answer to check against.
+currently only takes identity factors from this machine). Round-1 note: **the SBIN
+premise was mine and it was wrong** — no 1:2 split in March 2024, so the flat ratio
+~1.0 was a *correct* result for a split-free window, not evidence. What round 1 DID
+establish: Yahoo works from home with `auto_adjust=False`, `Adj Close` present, and
+ITC shows smooth dividend-only drift (ratio 0.947→1.0, no steps) — exactly what
+factor extraction needs. Round 2 just needs one window with a REAL split. Find one
+first, then probe it:
+
+```bash
+.venv/bin/python -c "
+import yfinance as yf
+for s in ('SBIN', 'HDFCBANK', 'ICICIBANK', 'ITC', 'TATASTEEL', 'LT', 'BHARTIARTL',
+          'JIO', 'ADANIPORTS', 'MARUTI', 'TITAN', 'ASIANPAINT'):
+    try:
+        sp = yf.Ticker(s + '.NS').splits
+        if sp is not None and len(sp):
+            print(s, 'last split:', sp.index[-1].date(), 'ratio', float(sp.iloc[-1]))
+    except Exception as e:
+        print(s, type(e).__name__, str(e)[:80])
+"
+```
+
+Take any symbol that printed a split inside the last ~2 years (or a known one from
+your broker's corporate-actions mail), run the §4 ratio probe over a window spanning
+that date, and paste both outputs. Expected if usable: the ratio STEPS by the split
+factor at the ex-date. If Yahoo reports no recent splits for anything probed, that too
+is the answer — it means adj factors from yfinance can't see splits, only dividends,
+and `adj_factors` design must say so loudly.
 
 ```bash
 .venv/bin/python -c "
@@ -240,9 +266,12 @@ Bonus (ITC.NS): ITC ratio first/last: 0.9470760315910154 1.0 | steps: 0
 ## 5. NSE library surface: calendar + scrip master [PROBE — same reason]
 
 Two designed-but-unwired features need endpoints nobody can inspect from the office:
-the **trading-holiday calendar** (to cross-check NIFTY-bar dates independently) and a
-**scrip master** (ISIN → symbol, for bhavcopy hygiene). Dump what the installed
-library actually offers and one sample per hit:
+the **trading-holiday calendar** (round 1 found `holidays`, `HOLIDAY_TRADING`,
+`HOLIDAY_CLEARING` exist — still need to see their return shape) and a **scrip
+master** (round 1 found `get_detailed_scrip_data`). Round 2 adds a third question the
+round-1 run raised: `net_probe`'s nseapi leg got **0 rows** from
+`fetch_equity_historical_data` with `date` objects — what signature and argument form
+does that method actually want? Dump all of it:
 
 ```bash
 .venv/bin/python -c "
@@ -261,6 +290,35 @@ for m in ms:
                 last = e
         else:
             print('---', m, 'needs args:', str(last)[:120])
+"
+```
+
+And the historical-data signature probe (this decides whether the nseapi provider
+earns its place in the fetch chain or gets demoted to bhav/announcements only):
+
+```bash
+.venv/bin/python -c "
+import inspect, tempfile
+from datetime import date
+from indtrader.data.nseapi_provider import NseIndiaApiProvider
+p = NseIndiaApiProvider(); n = p.client()
+for m in [x for x in dir(n) if 'histor' in x.lower() or 'archive' in x.lower()]:
+    try:
+        print('---', m, inspect.signature(getattr(n, m)))
+    except (TypeError, ValueError) as e:
+        print('---', m, 'no signature:', e)
+f = [x for x in dir(n) if 'historical' in x.lower()]
+if f:
+    meth = getattr(n, f[0])
+    for label, args in [('date objects', ('RELIANCE', date(2026, 10, 1), date(2026, 10, 15))),
+                        ('iso strings', ('RELIANCE', '2026-10-01', '2026-10-15')),
+                        ('kwargs iso', None)]:
+        try:
+            r = meth(*args) if args else meth('RELIANCE', from_date='2026-10-01', to_date='2026-10-15')
+            print('OK ', label, '->', type(r).__name__, (len(r) if hasattr(r, '__len__') else r))
+            break
+        except Exception as e:
+            print('ERR', label, '->', type(e).__name__, str(e)[:140])
 "
 ```
 
@@ -318,15 +376,41 @@ ANSWER 7:
 
 ---
 
-## Results table (I fill this from your ANSWER blocks; you can too)
+## Results table
 
-| # | Item | Status (PASS/FAIL/SKIP) | Decides |
+| # | Item | Status | Decides |
 |---|---|---|---|
-| 0 | offline suite on current checkout | | macOS/3.13 support claim |
-| 1 | network reachability | | which providers are usable at home |
-| 2 | live fetch/backtest/universe/health | | Phase-1 + Phase-2 acceptance |
-| 3 | bhavcopy contract | | the contract-test command + zero-gap gate |
-| 4 | yfinance Adj Close shape | | adj_factors final design |
-| 5 | NSE calendar/scrip methods | | wire or record-reject two features |
-| 6 | pypfopt combo | | pin scipy/pypfopt or keep fallback |
-| 7 | paper loop first run | | Phase-4 clock start date |
+| 0 | offline suite on current checkout | **PASS** (174+1 skip, macOS 3.13) | platform support claim — closed |
+| 1 | network reachability | PARTIAL — Yahoo YES; NSE direct 403 even at home; nseapi archive 0 rows | yfinance is the backfill backbone for real; nseapi daily() broken/unknown |
+| 2 | live fetch/backtest/universe/health | PARTIAL — RELIANCE 2927 rows, both universes (50/500), feeds 2743 rows; NIFTY never fetched so health never ran | universe sources work; acceptance gate still open (needs NIFTY + completed fetch-universe + --adjusted run) |
+| 3 | bhavcopy contract | PARTIAL — `equity_bhavcopy(date)` → CSV path, 10/10 price match; column list never printed | contract-test waits on the columns: line |
+| 4 | yfinance Adj Close shape | PARTIAL — Yahoo adj usable (ITC drift clean); SBIN premise wrong, so split behavior untested | adj_factors split handling waits on a real split window |
+| 5 | NSE calendar/scrip methods | OPEN — names found (`holidays`, `HOLIDAY_TRADING`, `get_detailed_scrip_data`); shapes + historical-data signature not dumped | wire vs record-reject + whether nseapi earns its fetch-chain slot |
+| 6 | pypfopt combo | OPEN — commit msg says broken on scipy 1.18.1; output not pasted | pin or keep the inverse-vol fallback |
+| 7 | paper loop first run | BLOCKED — a TypeError in scan/notify was reported, traceback not received | Phase-4 clock start |
+
+---
+
+## Round 2 — the exact short list (2026-11-11)
+
+Everything else from round 1 is absorbed. This is all that's left; paste each output
+into its ANSWER fence as before:
+
+1. **§2 completion** — `fetch NIFTY`, let `fetch-universe` finish, then
+   `fetch-adj --file data/universe.txt`, then
+   `backtest RELIANCE --strategy trend_sma200 --adjusted`, then
+   `health --file data/universe.txt` (all three flags verified on the CLI).
+2. **§3 round-2 probe** (new snippet) → the `columns:` line is the whole point.
+3. **§5 both snippets** (new second one especially) → historical-data signature +
+   holiday/scrip return shapes.
+4. **§6 outputs verbatim** (import line + HRPOpt run + scipy version:
+   `.venv/bin/python -c "import scipy; print(scipy.__version__)"`).
+5. **§7 `scan` + `notify` with the FULL traceback** — round 1 reported a TypeError
+   but the trace never arrived; `2>&1` it and paste every line. Run §2 step 1 first
+   (NIFTY + backfill): with data in the store, the error may not even reproduce.
+
+One more thing §2 taught us and nothing to run: the RELIANCE trend backtest lost
+money while buy-and-hold made ~550%. That is *plausible* (costed trend-following on
+one large-cap chop, plus the store keeps raw prices until `fetch-adj` runs) — but
+"plausible" is exactly what the `--adjusted` + completed-backfill rerun exists to
+turn into evidence. The gate in Phase 2 will judge strategies on the adjusted series.
