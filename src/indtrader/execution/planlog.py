@@ -40,7 +40,7 @@ class PlanLog:
 
     def record_signal(self, symbol: str, source: str, payload: dict) -> None:
         self.con.execute(
-            "INSERT INTO signals VALUES (?,?,?,?,?)".replace("?,?,", "?,?,?,").replace("?,)", "?)"),
+            "INSERT INTO signals VALUES (?,?,?,?)",  # ts, symbol, source, payload — 4 columns, 4 values
             (datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" "), symbol.upper(), source, json.dumps(payload, default=str)),
         )
         self.con.commit()

@@ -19,6 +19,8 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `scan` | Universe shortlist: one evidence row per symbol (trend, RRG quadrant, 6m momentum, delivery %, bulk deals, 20d turnover, compression, vol), ranked; illiquid names (<₹2Cr/day before the signal) dropped; shortlist journaled to `plans.sqlite` |
 | `fetch-feeds` | Nightly evidence refresh: delivery-% bhavcopy + bulk deals (NSE; keeps last-known when unreachable) |
 | `notify` | Evening briefing (regime + shortlist): sends to Telegram when configured, prints otherwise |
+| `bot` | Telegram command interface (long-poll, no public webhook): /status /book /scan /events /ann /fill /pause — chat-id-pinned, and the command registry can't contain order verbs (test-enforced) |
+| `pause` / `resume` | Quiet-switch for the daily outbound loop (flag file in DATA_DIR, survives restarts) |
 | `reconcile` | Journal vs broker holdings (Fyers read-only token): reports mismatches, never acts on them |
 | `fill SYM SIDE QTY PX --costs N` | Record an actual fill into the tax ledger |
 | `tax` / `tax --setoff` | FIFO realized P&L + CGT per FY (20%/12.5%, ₹1.25L exemption); `--setoff` applies the statutory loss set-off order + 8-year carry-forward instead of the upper bound |
@@ -120,11 +122,12 @@ results calendar + entry size gate, session calendar + health gate, corporate-ac
 factors, sizing/limits, journal, tax ledger (FIFO + CGT + statutory loss set-off with
 8-year carry-forward), book XIRR from the fills ledger, risk-balanced weights (inverse-vol
 + HRP w/ fallback), weekly risk report, Sunday review generator, Fyers read-only
-reconciliation, Telegram briefings, ETL+Docker, AI router (+ grounding rules, contract
+reconciliation, Telegram briefings AND a
+chat-pinned command bot (reads + journal only — no order path exists), pause/resume loop
+switch, ETL+Docker, AI router (+ grounding rules, contract
 evals, falsifier field), freshness CI.
 Phases 1–3 of the plan are code-complete; the live-data half (Nifty-500 backfill, bhavcopy
 contract test, 10y walk-forward runs) is gated on docs/HOME-VALIDATION.md — this network
 blocks NSE/Yahoo. Phase 4 (paper loop, 6–8 weeks) starts from that same checklist.
 Next: the laptop session (HOME-VALIDATION §1–§4), then the Phase-4 clock; deferred backlog:
-Telegram command interface, screener.in fundamentals (where the endpoint is verifiable),
-dashboard UI.
+screener.in fundamentals (where the endpoint is verifiable), dashboard UI.

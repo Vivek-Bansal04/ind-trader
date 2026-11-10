@@ -89,12 +89,16 @@ def build_briefing(settings: Settings | None = None) -> str:
 
 
 def maybe_notify(settings: Settings | None = None) -> tuple[bool, str]:
-    """Print the briefing; send to Telegram if configured. Never raises."""
+    """Print the briefing; send to Telegram if configured and not paused. Never raises."""
     s = settings or get_settings()
     text = build_briefing(s)
     print(text)
     if not is_on(s):
         return False, "telegram not configured"
+    from indtrader.alerts.pause import is_paused
+
+    if is_paused(s):
+        return False, "loop PAUSED (resume: indtrader resume, or /resume on the bot)"
     return send(text, s)
 
 

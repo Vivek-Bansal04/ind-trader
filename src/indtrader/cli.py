@@ -245,6 +245,28 @@ def cmd_notify(args) -> int:
     return 0 if sent else 1
 
 
+def cmd_bot(args) -> int:
+    from indtrader.alerts.commands import poll_loop
+
+    return poll_loop()
+
+
+def cmd_pause(args) -> int:
+    from indtrader.alerts.pause import flag_path, set_paused
+
+    set_paused(True, "paused via CLI")
+    print(f"daily outbound loop paused ({flag_path()}) — resume with: indtrader resume")
+    return 0
+
+
+def cmd_resume(args) -> int:
+    from indtrader.alerts.pause import is_paused, set_paused
+
+    set_paused(False)
+    print("loop active" if not is_paused() else "resume FAILED — flag still present")
+    return 0 if not is_paused() else 1
+
+
 def cmd_reconcile(args) -> int:
     from indtrader.broker.fyers import FyersReadOnly
     from indtrader.broker.reconcile import reconcile
@@ -586,6 +608,12 @@ def main(argv=None) -> int:
     s.add_argument("--max-stale", dest="max_stale", type=int, default=3)
     s.set_defaults(fn=cmd_health)
     s = sub.add_parser("notify"); s.set_defaults(fn=cmd_notify)
+    s = sub.add_parser("bot", help="Telegram command interface (long-poll; reads + journal only)")
+    s.set_defaults(fn=cmd_bot)
+    s = sub.add_parser("pause", help="quiet the daily outbound loop (survives restarts)")
+    s.set_defaults(fn=cmd_pause)
+    s = sub.add_parser("resume", help="undo pause")
+    s.set_defaults(fn=cmd_resume)
     s = sub.add_parser("reconcile")
     s.add_argument("--report-only", action="store_true", help="print only, never send Telegram")
     s.set_defaults(fn=cmd_reconcile)
