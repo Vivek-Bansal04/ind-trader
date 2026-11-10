@@ -1,94 +1,105 @@
-# Home-laptop validation TODO (things this office machine cannot do)
+# Home-laptop validation — the tests this office machine CANNOT run
 
-The office laptop TLS-intercepts Yahoo (SSL `WRONG_VERSION_NUMBER`) and 403-blocks NSE,
-so every **live-data** and **endpoint-shape** check is parked here. Run these on the
-personal laptop (any network that isn't the office proxy), fill the `ANSWER:` lines or
-paste outputs back in chat — I'll fold the results into code the same day.
+**How to use this file.** Every block below is copy-paste bash for the MacBook
+(`~/Desktop/ind-trader`). Run them in order, then **paste each command's complete
+output into the matching `ANSWER n` block IN THIS FILE** (replace the `...paste
+output here...` line, keep it inside the fences), and push it back:
 
-Legend: **[READY]** = command exists at the commit you're on · **[PROBE]** = exploratory,
-just capture the output · **[PENDING CODE]** = will be a real command in a later push;
-skip if it doesn't exist yet.
+```bash
+git add docs/HOME-VALIDATION.md
+git commit -m "HOME-VALIDATION results from MacBook"
+git push
+```
 
-> Update 2026-11-10: **AMFI (MF NAVs) is reachable from the office too** — the Phase-6
-> MF layer (`mf-navs`) was already live-verified here (14,445 NAVs, contract green).
-> Nothing in this checklist depends on it; it stays for the NSE/Yahoo items only.
+Then say the word — I'll pull, read the answers, and fold them into code the same day.
+A failure or error trace is a perfectly good answer: paste it verbatim, don't
+interpret it. "Errors are data" is the rule here, not a slogan — every endpoint shape
+in this project was learned this way, never guessed.
 
-> **Your laptop is the MacBook (macOS)** — every block below is bash (`.venv/bin/python`).
-> On a Windows box the translation is the reverse: `.venv\Scripts\python.exe` + `\` paths.
->
-> Results received (commit `f54585f`): §0 ran on an **older checkout** — 147 items means
-> the log predates the bot + Phase-6 commits. Its 1 failure was a test hardcoding "nse
-> lib not installed"; now fixed to pass either way, and your live `method: announcements`
-> finding is pinned by a new probe test. Your `NSE(download_folder=...)` fix is kept and
-> the same bug in `events.py` was fixed too. **Please `git pull` and re-run §0** (expect
-> ~175 tests), then fill the still-empty ANSWER slots §1–§6 — the §3/§4/§5/§6 snippets
-> below are written for the newer `nse.NSE` library your machine has.
+**Why these can't run here:** the office network TLS-intercepts Yahoo (SSL
+`WRONG_VERSION_NUMBER`) and 403-blocks NSE. AMFI is reachable (already live-verified
+from the office: 14,445 NAVs), so nothing below depends on AMFI.
+
+Prior results received (commit `f54585f`): §0 ran but on a **stale checkout** (147
+items — predates the bot + Phase-6 commits) and its 1 failure was an office-side test
+bug, now fixed. Its live probe finding (`method: announcements`) is pinned by a test.
+**§0 must be re-run on the current checkout, and §1–§7 have never produced output yet.**
 
 ---
 
-## 0. Setup (one time)
+## 0. Full offline test suite on current checkout [must re-run]
 
-macOS/Linux (your MacBook):
+Proves the whole platform (174 tests) is green on macOS + Python 3.13 with zero
+network. This gates everything else.
 
 ```bash
-git clone https://github.com/Vivek-Bansal04/ind-trader.git
-cd ind-trader
-python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[dev,nse]"
+git pull
 .venv/bin/python -m pytest
 ```
 
-(On Windows keep `python -m pip` — the `pip.exe` shim is blocked on the office box only.)
+Expected last line: `174 passed, 1 skipped` (the skip is the office-side AMFI live
+probe; it only runs with `INDTRADER_LIVE_PROBE=1`). If the count differs, note it —
+do not "fix" anything, just report.
 
-Expected: all tests pass (~175), fully offline.
+```
+ANSWER 0:
+...paste output here...
+```
 
-`ANSWER 0:` pytest last line → ______
-
-## 1. Network reachability [READY]
+## 1. Network reachability [why-not-here: both probes are blocked at the office]
 
 ```bash
 .venv/bin/python tools/net_probe.py
 ```
 
 Expected at home: `PASS yahoo-chart`, `PASS nse-home`, `PASS yfinance-lib`,
-`PASS nseapi-arch` (or one SKIP). Copy all lines + the JSON.
+`PASS nseapi-arch` (or one SKIP). Copy ALL lines including the JSON at the end.
 
-`ANSWER 1:` ______
+```
+ANSWER 1:
+...paste output here...
+```
 
-## 2. Real data end-to-end [READY] — needs ANSWER 1 mostly PASS
+## 2. Live data end-to-end [needs §1 mostly PASS] — the Phase-1/2 acceptance data
 
-Small smoke first (seconds), then the Phase-1 real thing (minutes, run overnight if slow):
+Smoke first (seconds), then the real backfill (minutes; fine to leave running):
 
 ```bash
 .venv/bin/python -m indtrader.cli fetch RELIANCE
 .venv/bin/python -m indtrader.cli backtest RELIANCE --strategy trend_sma200 --costs
-
-# universe from NSE itself (this needs the network):
 .venv/bin/python -m indtrader.cli universe --index "nifty 50"  --out data/universe50.txt
-.venv/bin/python -m indtrader.cli universe --index "nifty 500" --out data/universe.txt   # if this errors, note the error - Nifty-500 source is exactly what we need to learn
-# 10-year backfill + evidence feeds:
+.venv/bin/python -m indtrader.cli universe --index "nifty 500" --out data/universe.txt
 .venv/bin/python -m indtrader.cli fetch-universe --file data/universe.txt
 .venv/bin/python -m indtrader.cli fetch-feeds --days 30
+.venv/bin/python -m indtrader.cli health
 ```
 
-Paste the `backtest` summary block and any errors verbatim (failures are data too).
+What each answer decides:
+- `backtest RELIANCE` summary block → real costed equity curve vs the synthetic fixtures
+- `universe --index "nifty 500"` → whether the NSE-backed universe source works at all
+  (if it errors, the traceback IS the answer — the Nifty-500 source is exactly what we need to learn)
+- `fetch-universe` row counts per symbol → the 10-year store that backtests need
+- `health` → the zero-gap gate vs NIFTY's own bar dates; paste its full output
 
-`ANSWER 2:` ______
+Paste every command's output (or its error) — one failure does not stop the others.
 
-## 3. Bhavcopy contract test [PROBE] — cross-check vs NSE's own numbers
+```
+ANSWER 2:
+...paste output here...
+```
 
-`NseIndiaApiProvider.client()` opens the library client with the `download_folder`
-ritual handled (your laptop proved why that matters). It needs the NEW-generation
-library (`pip install "indtrader[nse]"`); if `from nse import NSE` fails on an old
-install, paste the fallback method dump at the end of this section instead. Run after
-§2 and paste the whole output:
+## 3. Bhavcopy contract probe [PROBE — endpoint shape unknown from the office]
+
+The Phase-1 acceptance gate cross-checks our store's closes against NSE's own
+bhavcopy — but nobody has SEEN this endpoint's response shape from here. This probe
+finds the method and prints the real column contract instead of letting me guess it.
+Run after §2 (so the store has rows to compare).
 
 ```bash
 .venv/bin/python -c "
-import tempfile
 from indtrader.data.store import BarStore
 from indtrader.data.nseapi_provider import NseIndiaApiProvider
-p = NseIndiaApiProvider(); n = p.client()
+n = NseIndiaApiProvider().client()
 print('nse lib:', type(n).__module__, type(n).__name__)
 meth = [m for m in dir(n) if 'bhav' in m.lower() or 'margin' in m.lower() or 'holiday' in m.lower() or 'scrip' in m.lower()]
 print('relevant methods:', meth)
@@ -117,32 +128,56 @@ if df is not None and hasattr(df, 'columns'):
 "
 ```
 
-If every bhav method errors, paste the printed method list instead — that alone answers
-what the adapter must call.
+If every bhav method errors, the printed `relevant methods:` line alone answers what
+the adapter must call — paste it.
 
-`ANSWER 3:` ______
+```
+ANSWER 3:
+...paste output here...
+```
 
-## 4. yfinance Adjusted Close shape [PROBE] — feeds the corporate-action factor design
+## 4. yfinance Adjusted Close shape [PROBE — Yahoo unreachable from the office]
+
+Decides how `adj_factors` is built (the store's corporate-action adjustment layer
+currently only takes identity factors from this machine). SBIN had a 1:2 split in
+March 2024 — a known correct answer to check against.
 
 ```bash
 .venv/bin/python -c "
 import yfinance as yf
-t = yf.Ticker('SBIN.NS')   # SBIN had a 1:2 split in 2024 — good test case
+t = yf.Ticker('SBIN.NS')
 h = t.history(start='2024-01-01', end='2024-05-01', auto_adjust=False)
 print(h[['Close','Adj Close']].head(3)); print(h[['Close','Adj Close']].tail(3))
 print('ratio tail/head:', (h['Adj Close']/h['Close']).iloc[-1] / (h['Adj Close']/h['Close']).iloc[0])
 "
 ```
 
-Expected if usable: a ratio near 0.5 across the March-2024 split (adj/raw diverges).
-Paste all of it — this decides how we build `adj_factors`.
+Expected if usable: ratio near **0.5** across the split (adj/raw diverges). If the
+call raises an SSL/HTTP error, that is also a real answer — paste it.
 
-`ANSWER 4:` ______
+Bonus if it works (one extra command, tells us dividend adjustment is also in there):
 
-## 5. NSE API surface for calendar + scrip master [PROBE]
+```bash
+.venv/bin/python -c "
+import yfinance as yf
+t = yf.Ticker('ITC.NS')   # steady dividend payer, no splits this window
+h = t.history(start='2024-01-01', end='2024-12-31', auto_adjust=False)
+r = (h['Adj Close']/h['Close']).dropna()
+print('ITC ratio first/last:', r.iloc[0], r.iloc[-1], '| steps:', (r.round(6).diff().dropna().abs() > 1e-6).sum())
+"
+```
 
-Two Phase-1/2 items need endpoints I can't inspect from the office box (calendar table,
-ISIN/scrip master). Dump what the installed library actually offers + one sample each:
+```
+ANSWER 4:
+...paste output here...
+```
+
+## 5. NSE library surface: calendar + scrip master [PROBE — same reason]
+
+Two designed-but-unwired features need endpoints nobody can inspect from the office:
+the **trading-holiday calendar** (to cross-check NIFTY-bar dates independently) and a
+**scrip master** (ISIN → symbol, for bhavcopy hygiene). Dump what the installed
+library actually offers and one sample per hit:
 
 ```bash
 .venv/bin/python -c "
@@ -164,14 +199,17 @@ for m in ms:
 "
 ```
 
-`ANSWER 5:` ______
+```
+ANSWER 5:
+...paste output here...
+```
 
-## 6. pypfopt on this stack [READY] — FOUND BROKEN on the office box (2026-11-10)
+## 6. pypfopt / scipy combination [READY — FOUND BROKEN on the office stack]
 
 `pypfopt 1.6.0` + current scipy: `HRPOpt.optimize()` dies on
-`scipy.cluster.hierarchy has no attribute '_LINKAGE_METHODS'`. The code now catches
-this and falls back to inverse_vol with a loud message, so nothing is blocked — but
-if HRP is actually wanted, test whether an older combo works on the laptop:
+`scipy.cluster.hierarchy has no attribute '_LINKAGE_METHODS'`. The code catches it
+and falls back to inverse-vol loudly, so nothing is blocked — but if HRP is actually
+wanted, find a combination that runs:
 
 ```bash
 .venv/bin/python -c "from pypfopt import HRPOpt; from pypfopt.risk_models import risk_matrix; print('pypfopt import OK')"
@@ -179,39 +217,51 @@ if HRP is actually wanted, test whether an older combo works on the laptop:
 import numpy as np, pandas as pd
 from pypfopt import HRPOpt
 r = pd.DataFrame(np.random.default_rng(1).normal(0, .02, (300, 4)), columns=list('ABCD'))
-print(HRPOpt(r).optimize())"   # if this throws _LINKAGE_METHODS, HRP is dead on this scipy
+print(HRPOpt(r).optimize())
+"
 ```
-If dead: try `.venv/bin/python -m pip install 'scipy<1.15'` in a scratch venv or pin PyPortfolioOpt
-to a build matching installed scipy, and report which combination actually runs.
 
-`ANSWER 6:` ______
+If the second one throws `_LINKAGE_METHODS`: in a throwaway venv try
+`pip install 'scipy<1.15'` (or pin PyPortfolioOpt to a build matching the installed
+scipy) and report **which exact combination runs** — that becomes the pin.
 
-## 7. Phase-4 paper loop starter [READY after §2] — the calendar commitment begins
+```
+ANSWER 6:
+...paste output here...
+```
 
-One evening:
+## 7. Phase-4 paper loop start [after §2] — the calendar commitment begins
+
+One evening, two commands:
 
 ```bash
 .venv/bin/python -m indtrader.cli scan
 .venv/bin/python -m indtrader.cli notify
 ```
 
-Then the acceptance rule from the build plan: **20 trading days of ETL with zero gaps
-vs bhavcopy**, and every paper fill entered with `fill SYMBOL BUY|SELL QTY PRICE
---costs <all-in>` within a day. No code needed — just don't skip evenings. 📅
+Paste the output (or first errors). Then the build plan's acceptance rule starts
+counting, no code involved: **20 trading days of ETL with zero gaps vs bhavcopy**
+(measured by `health`), and every paper fill entered with
+`fill SYMBOL BUY|SELL QTY PRICE --costs <all-in>` within a day of the real fill.
+Fills are human-confirmed records of trades you already made — nothing in this repo
+can place an order, and nothing will be added that can.
 
-`ANSWER 7:` first run date + any errors → ______
+```
+ANSWER 7:
+...paste output here...
+```
 
 ---
 
-## Results table (I'll fill from your answers, you can too)
+## Results table (I fill this from your ANSWER blocks; you can too)
 
-| # | Item | Status (PASS/FAIL/SKIP) | Notes |
+| # | Item | Status (PASS/FAIL/SKIP) | Decides |
 |---|---|---|---|
-| 0 | offline test suite | | |
-| 1 | network reachability | | |
-| 2 | live fetch + backtest + universe | | |
-| 3 | bhavcopy contract test | | |
-| 4 | yfinance Adj Close shape | | |
-| 5 | NSE calendar/scrip endpoints | | |
-| 6 | pypfopt import | | |
-| 7 | paper loop started | | |
+| 0 | offline suite on current checkout | | macOS/3.13 support claim |
+| 1 | network reachability | | which providers are usable at home |
+| 2 | live fetch/backtest/universe/health | | Phase-1 + Phase-2 acceptance |
+| 3 | bhavcopy contract | | the contract-test command + zero-gap gate |
+| 4 | yfinance Adj Close shape | | adj_factors final design |
+| 5 | NSE calendar/scrip methods | | wire or record-reject two features |
+| 6 | pypfopt combo | | pin scipy/pypfopt or keep fallback |
+| 7 | paper loop first run | | Phase-4 clock start date |
