@@ -101,13 +101,17 @@ class FyTax:
     def tax_total(self) -> float:
         return round(self.tax_stcg + self.tax_ltcg, 2)
 
-    def lines(self) -> list[str]:
-        return [
+    def lines(self, dividend: dict | None = None) -> list[str]:
+        out = [
             f"{self.financial_year}: STCG {self.stcg_net:,.0f} | LTCG {self.ltcg_net:,.0f}"
             f" (taxable {self.ltcg_taxable:,.0f}, exempt up to {LTCG_EXEMPTION:,.0f})",
             f"   tax @20%/12.5% = {self.tax_stcg:,.0f} + {self.tax_ltcg:,.0f} = {self.tax_total:,.0f}"
             "  [losses reported, not set off]",
         ]
+        if dividend:
+            out.append(f"   dividend income: gross {dividend['gross']:,.0f} - TDS {dividend['tds']:,.0f}"
+                       f" = net {dividend['net']:,.0f}  [slab-rate income; reported, not computed]")
+        return out
 
 
 def tax_summary(matches: list[RealizedMatch]) -> list[FyTax]:

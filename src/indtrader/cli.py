@@ -415,6 +415,50 @@ def mf_is(sym: str) -> bool:
     return is_mf(sym)
 
 
+def cmd_action(args) -> int:
+    """Record a corporate action EXACTLY as the statement showed it — the engine
+    never infers these from price jumps."""
+    from datetime import date as _date
+
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio.actions import add_action
+
+    dt = _date.fromisoformat(args.date) if args.date else _date.today()
+    log = PlanLog()
+    try:
+        aid = add_action(log, dt, args.symbol, args.kind, qty_delta=args.qty,
+                         cash=args.cash, tds=args.tds, note=args.note or "")
+        print(f"recorded action #{aid}: {args.kind.lower()} {args.symbol.upper()} on {dt}"
+              + (f" qty {args.qty:g}" if args.qty else "")
+              + (f" cash {args.cash:g}" if args.cash else "")
+              + (f" tds {args.tds:g}" if args.tds else ""))
+        return 0
+    except ValueError as e:
+        print(f"action rejected: {e}", file=sys.stderr)
+        return 1
+    finally:
+        log.close()
+
+
+def cmd_actions(args) -> int:
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio.actions import load_actions
+
+    log = PlanLog()
+    try:
+        rows = load_actions(log)
+        if not rows:
+            print("no corporate actions recorded — add statement facts with: "
+                  "action SYM dividend --cash 4000 --tds 200 --date 2026-08-01")
+            return 0
+        for a in rows[-40:]:
+            print(f"{a.dt}  {a.symbol:14s} {a.kind:10s} qty {a.qty_delta:>10,.3f} "
+                  f"cash {a.cash:>12,.2f} tds {a.tds:>9,.2f}  {a.note[:40]}")
+        return 0
+    finally:
+        log.close()
+
+
 def cmd_bot(args) -> int:
     from indtrader.alerts.commands import poll_loop
 
@@ -478,11 +522,14 @@ def cmd_fill(args) -> int:
 
 def cmd_tax(args) -> int:
     from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio.actions import apply_actions, dividend_income_by_fy, load_actions
     from indtrader.portfolio.tax import realize, tax_summary, tax_summary_with_setoff
 
     log = PlanLog()
-    entries = log.fills()
+    actions = load_actions(log)
+    entries = apply_actions(log.fills(), actions)
     log.close()
+    dividends = dividend_income_by_fy(actions)
     if not entries:
         print("ledger empty — record actual fills with: indtrader fill SYM BUY 100 1400 --date 2026-01-15")
         return 0
@@ -501,11 +548,14 @@ def cmd_tax(args) -> int:
                 print(f"   carry forward: STCG {t.carry_stcg_out:,.0f} LTCG {t.carry_ltcg_out:,.0f}"
                       + (f" | {t.note}" if t.note else ""))
         print("(set-off order + 8-year expiry per documented simplifications; ITR-order approximation)")
+        for fy, d in dividends.items():
+            print(f"{fy}: dividend income gross {d['gross']:,.0f} - TDS {d['tds']:,.0f} = net "
+                  f"{d['net']:,.0f}  [slab-rate income; reported, not computed]")
     else:
         for fy in tax_summary(matches):
-            for line in fy.lines():
+            for line in fy.lines(dividends.get(fy.financial_year)):
                 print(line)
-    held = {s: q for s, q in sorted(open_pos.items()) if q > 0}
+    held = {s: (round(q, 4) if q == q else q) for s, q in sorted(open_pos.items()) if q > 0}
     print("still held:", held if held else "nothing")
     print("computation only — verify with your CA before filing.")
     return 0
@@ -681,16 +731,14 @@ def cmd_weights(args) -> int:
 
 def cmd_xirr(args) -> int:
     from indtrader.execution.planlog import PlanLog
-    from indtrader.portfolio.valuation import book_xirr, held_quantities
+    from indtrader.portfolio.actions import apply_actions, extra_flows, load_actions
+    from indtrader.portfolio.valuation import book_xirr, held_quantities, resolve_marks
 
     store, log = BarStore(), PlanLog()
     try:
-        fills = log.fills()
-        last = {}
-        for sym in held_quantities(fills):
-            df = store.load(sym)
-            last[sym] = float(df["close"].iloc[-1]) if not df.empty else None
-        out = book_xirr(fills, last)
+        fills = apply_actions(log.fills(), load_actions(log))
+        last = resolve_marks(store, held_quantities(fills))
+        out = book_xirr(fills, last, extra_flows=extra_flows(load_actions(log)))
         print(json.dumps(out, indent=1))
         return 0 if out["ok"] else 1
     finally:
@@ -800,6 +848,18 @@ def main(argv=None) -> int:
     s.set_defaults(fn=cmd_fill_mf)
     s = sub.add_parser("sips", help="SIP aggregation + money-weighted return of the MF slice")
     s.set_defaults(fn=cmd_sips)
+    s = sub.add_parser("action", help="record a corporate action as the statement showed it")
+    s.add_argument("symbol")
+    s.add_argument("kind", help="dividend | bonus | split | redemption")
+    s.add_argument("--qty", dest="qty", type=float, default=0.0,
+                   help="units added (bonus/split) or redeemed (redemption)")
+    s.add_argument("--cash", type=float, default=0.0, help="net cash received")
+    s.add_argument("--tds", type=float, default=0.0, help="TDS withheld on that cash")
+    s.add_argument("--date", default=None, help="YYYY-MM-DD payout/ex date (default today)")
+    s.add_argument("--note", default="")
+    s.set_defaults(fn=cmd_action)
+    s = sub.add_parser("actions", help="list recorded corporate actions")
+    s.set_defaults(fn=cmd_actions)
     s = sub.add_parser("rebalance", help="monthly rebalance proposals + tax lens (targets JSON: {SYM: weight})")
     s.add_argument("--file", required=True)
     s.add_argument("--tol", type=float, default=0.02, help="no-trade band as fraction of total")

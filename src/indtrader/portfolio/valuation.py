@@ -44,9 +44,12 @@ def resolve_marks(store, symbols, equity_col: str = "close") -> dict:
     return out
 
 
-def book_xirr(fills, last_close: dict[str, float | None], asof: date | None = None) -> dict:
+def book_xirr(fills, last_close: dict[str, float | None], asof: date | None = None,
+              extra_flows: list | None = None) -> dict:
+    """extra_flows: dated cash items outside the fills ledger (dividends). Held units
+    must already reflect corporate actions — pass apply_actions(fills, actions) as fills."""
     asof = asof or date.today()
-    flows = book_flows(fills)
+    flows = book_flows(fills) + list(extra_flows or [])
     if len(flows) < 2:
         return {"ok": False, "reason": "fewer than 2 fills — XIRR needs a cashflow history"}
     held = held_quantities(fills)

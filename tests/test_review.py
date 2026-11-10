@@ -40,6 +40,12 @@ def run_review(tmp_path, monkeypatch, capsys, with_fills=True):
 
         store_announcements(store, [{"symbol": "TATA", "d": date.today().isoformat(),
                                      "title": "Director resignation", "source": "test"}])
+        from indtrader.portfolio.mf import store_nav
+        from indtrader.portfolio.actions import add_action
+
+        store_nav(store, "100001", "Alpha Fund", 55.0, date.today().isoformat())
+        log.add_fill(date(2024, 6, 3), "MF:100001", "BUY", 50.0, 50.0, 0.0, "sip")
+        add_action(log, date.today(), "TATA", "dividend", cash=1000.0, tds=50.0, note="test")
         log.close()
     store.close()
     from indtrader.cli import main
@@ -58,6 +64,9 @@ def test_review_sections_and_journal_trace(tmp_path, monkeypatch, capsys):
     assert "## Book" in out and "XIRR" in out
     assert "thesis: trend break" in out            # the fill traces to its executed plan
     assert "## Journal" in out
+    assert "MF slice: 1 schemes" in out            # investing leg visible in the review
+    assert "SIP holding" in out
+    assert "Corporate actions (30d): 1 events, cash in 1,000" in out
     assert "all-clear" in out or "resignation" in out  # AMBER within 7d, or none if date drift
     assert "## Data health" in out
 

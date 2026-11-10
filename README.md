@@ -33,6 +33,8 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `mf [text]` | No arg: MF slice of the book at stored NAVs; with text: scheme search by name |
 | `fill-mf CODE SIDE UNITS NAV [--date]` | Record one SIP instalment/redemption — fractional units, NAV-priced (ledger rows carry the MF: prefix) |
 | `sips` | SIP aggregation (units, invested, value, gain%) + XIRR of the MF slice; refuses on missing NAVs |
+| `action SYM KIND [--qty --cash --tds --date]` | Record a corporate action EXACTLY as the statement showed it (dividend/bonus/split/redemption) — never inferred from price jumps |
+| `actions` | List recorded corporate actions; effects: dividend → XIRR flow + per-FY income (gross/TDS/net) in `tax`, bonus → zero-cost lot, split → FIFO basis rescale, redemption → synthesized SELL |
 | `rebalance --file targets.json` | Monthly rebalance proposals vs target weights with the tax lens on every sell; unknown marks size 0, never guessed; proposals only |
 | `riskreport` | Weekly report: regime light + flip/FTD note, book XIRR + concentration, journal counts, universe data health |
 | `health` | Data-health gate vs the NIFTY session calendar: rows, gaps, staleness, adj coverage; exit 1 on breaches |
@@ -134,9 +136,12 @@ evals, falsifier field), freshness CI.
 Phases 1–3 of the plan are code-complete; the live-data half (Nifty-500 backfill, bhavcopy
 contract test, 10y walk-forward runs) is gated on docs/HOME-VALIDATION.md — this network
 blocks NSE/Yahoo. Phase 4 (paper loop, 6–8 weeks) starts from that same checklist.
-Phase 6 (investing leg) started early as allowed by the plan ("parallel from wk 9"): the
-MF NAV layer is BUILT AND LIVE-VERIFIED — AMFI is reachable even from the blocked office
-network (14,445 NAVs stored, contract-probe green, 2026-11-10). Phase 5 stays gated on
+Phase 6 (investing leg) is feature-complete offline and live-verified where possible:
+MF NAV layer (AMFI is NOT blocked — 14,445 NAVs stored, contract-probe green, 2026-11-10),
+SIP ledger with fractional units, dividend/corporate-action ledger (cost-basis-correct
+FIFO treatment, dividend income in the tax sheet, redemption sells synthesized),
+rebalance proposals with the tax lens, MF slice + CA income surfaced in review and
+riskreport. Phase 5 stays gated on
 Phase 4 passing, per plan; its buildable surface already exists (read-only reconcile,
 journal, sizing).
 Next: the laptop session (HOME-VALIDATION §1–§4), then the Phase-4 clock; deferred backlog:

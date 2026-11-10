@@ -118,6 +118,11 @@ def _status(argv, s):
             chg = float(last / wk.iloc[0] - 1) if len(wk) >= 2 else 0.0
             lines.append(f"NIFTY {float(last):,.0f} ({chg:+.2%} 5d) at {idx.index[-1].date()}")
         lines.append(_book_line(store, log))
+        from indtrader.portfolio.actions import load_actions, recent_income
+
+        inc = recent_income(load_actions(log), 30)
+        if inc["events"]:
+            lines.append(f"Income/CA (30d): {inc['events']} events, cash in {inc['cash_in']:,.0f}")
         n_open = len(log.open_plans())
         etl = store.con.execute("SELECT max(run_at) FROM ingest_runs").fetchone()[0]
         lines.append(f"{n_open} open plans | last ETL {etl or 'never'} | loop "
@@ -129,13 +134,15 @@ def _status(argv, s):
 
 
 def _book_line(store, log) -> str:
+    from indtrader.portfolio.actions import apply_actions, extra_flows, load_actions
     from indtrader.portfolio.valuation import book_xirr, held_quantities, resolve_marks
 
-    fills = log.fills()
+    actions = load_actions(log)
+    fills = apply_actions(log.fills(), actions)
     if not fills:
         return "Book: no fills yet"
     marks = resolve_marks(store, held_quantities(fills))
-    rep = book_xirr(fills, marks)
+    rep = book_xirr(fills, marks, extra_flows(extra_flows(actions)))
     if not rep["ok"]:
         return f"Book: XIRR unavailable — {rep['reason']}"
     return (f"Book: XIRR {'unbounded' if rep['xirr'] is None else format(rep['xirr'], '.1%')}"

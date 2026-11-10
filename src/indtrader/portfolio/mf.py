@@ -147,3 +147,22 @@ def mf_flows(fills) -> list:
 
 def equity_flows(fills) -> list:
     return [f for f in fills if not is_mf(f.symbol)]
+
+
+def slice_summary(fills, marks: dict) -> dict:
+    """{n, value, missing:[...]} for the MF slice — missing marks are NAMED, the
+    value is knowns-only and labeled as such by callers, never a silent understatement."""
+    units: dict[str, float] = {}
+    for f in fills:
+        if is_mf(f.symbol):
+            units[f.symbol] = units.get(f.symbol, 0.0) + (f.qty if f.side.upper() == "BUY" else -f.qty)
+    held = {s: q for s, q in units.items() if q != 0}
+    value = 0.0
+    missing = []
+    for sym in sorted(held):
+        m = marks.get(sym)
+        if m is None:
+            missing.append(sym)
+        else:
+            value += held[sym] * float(m)
+    return {"n": len(held), "value": round(value, 2), "missing": missing}

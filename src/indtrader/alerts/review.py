@@ -43,18 +43,30 @@ def build_weekly_review(settings=None, scan_rows: int = 10) -> str:
         else:
             L.append("## Market\nNIFTY bars missing in store — ETL gap, fix before trusting anything below")
 
-        # 2. book vs plan
-        fills = log.fills()
-        held = held_quantities(fills)
+        # 2. book vs plan (fills enriched by corporate actions; journal checks use RAW)
+        from indtrader.portfolio.actions import (apply_actions, extra_flows, load_actions,
+                                                 recent_income)
+        from indtrader.portfolio.mf import is_mf as mf_is
+        from indtrader.portfolio.mf import slice_summary
         from indtrader.portfolio.valuation import resolve_marks
+
+        actions = load_actions(log)
+        raw_fills = log.fills()
+        fills = apply_actions(raw_fills, actions)
+        held = held_quantities(fills)
+        raw_held = held_quantities(raw_fills)
         marks = resolve_marks(store, held)
-        rep = book_xirr(fills, marks)
+        rep = book_xirr(fills, marks, extra_flows=extra_flows(actions))
         L.append("## Book")
         if not fills:
             L.append("No fills yet — paper loop not started.")
         else:
             L.append(f"XIRR: {'uncomputable/missing marks' if not rep['ok'] else ('unbounded' if rep['xirr'] is None else format(rep['xirr'], '.1%'))}"
                      f" | open value {rep.get('open_value', 0):,.0f} | {len(held)} positions")
+            sl = slice_summary(fills, marks)
+            if sl["n"]:
+                L.append(f"MF slice: {sl['n']} schemes, value {sl['value']:,.0f}"
+                         + (f" (NAV missing: {', '.join(sl['missing'])})" if sl["missing"] else ""))
             for sym, q in sorted(held.items()):
                 px = marks.get(sym)
                 plan = log.con.execute(
@@ -64,15 +76,22 @@ def build_weekly_review(settings=None, scan_rows: int = 10) -> str:
                     px_s = f"{px:,.1f}" if px else "no mark"
                     L.append(f"- {sym} qty {q} @ {px_s} | plan entry {plan[0]}, stop {plan[1]}, "
                              f"target {plan[2]} | thesis: {str(plan[3])[:80]}")
+                elif mf_is(sym):
+                    L.append(f"- {sym} qty {q} @ {px if px else 'no NAV'} — SIP holding (no plan required)")
+                elif sym not in raw_held:
+                    L.append(f"- {sym} qty {q} — from corporate action (bonus/split), no plan needed")
                 else:
                     L.append(f"- {sym} qty {q} — NO executed plan behind this fill (journal gap)")
 
         # 3. journal hygiene
         open_plans = log.open_plans()
         n_stale = log.con.execute("SELECT COUNT(*) FROM plans WHERE status='stale'").fetchone()[0]
+        inc = recent_income(actions, 30)
         L.append("\n## Journal\n"
                  f"{len(fills)} fills | {len(open_plans)} open plans | {n_stale} expired (stale) "
-                 f"| every open plan older than 2 days should be re-confirmed or cancelled")
+                 f"| every open plan older than 2 days should be re-confirmed or cancelled\n"
+                 f"Corporate actions (30d): {inc['events']} events, cash in {inc['cash_in']:,.0f}"
+                 + (f" incl TDS {inc['tds']:,.0f}" if inc["tds"] else ""))
 
         # 4. announcements on holdings only
         L.append("\n## Announcements (holdings)")
