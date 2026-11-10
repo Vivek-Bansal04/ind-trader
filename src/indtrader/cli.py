@@ -247,6 +247,28 @@ def cmd_tax(args) -> int:
     return 0
 
 
+def cmd_pbacktest(args) -> int:
+    from indtrader.backtest.portfolio import PortfolioBacktester
+    from indtrader.backtest.strategies import REGISTRY
+
+    store = BarStore()
+    symbols = args.symbols or load_universe(args.file)
+    data = {}
+    for sym in symbols:
+        df = _load_or_fetch(store, sym)
+        if not df.empty:
+            data[sym] = df
+    if len(data) < 2:
+        print("need at least 2 symbols with data (fetch-universe on a normal network)", file=sys.stderr)
+        return 1
+    idx = _load_or_fetch(store, args.index)
+    bt = PortfolioBacktester(capital=args.capital, max_positions=args.positions,
+                             bench_closes=(idx["close"] if not idx.empty else None))
+    res = bt.run(data, REGISTRY[args.strategy])
+    print(json.dumps(res.summary(), indent=1))
+    return 0
+
+
 def cmd_ai(args) -> int:
     from indtrader.ai.prompts import build_prompt
     from indtrader.ai.router import build_router
@@ -312,6 +334,14 @@ def main(argv=None) -> int:
     s.set_defaults(fn=cmd_fill)
     s = sub.add_parser("tax", help="FIFO realized P&L + CGT estimate per financial year")
     s.set_defaults(fn=cmd_tax)
+    s = sub.add_parser("pbacktest", help="portfolio-level backtest: shared cash, concurrent positions")
+    s.add_argument("symbols", nargs="*")
+    s.add_argument("--file", default=None)
+    s.add_argument("--index", default="NIFTY")
+    s.add_argument("--strategy", default="trend_sma200")
+    s.add_argument("--capital", type=float, default=1_000_000.0)
+    s.add_argument("--positions", type=int, default=5)
+    s.set_defaults(fn=cmd_pbacktest)
     s = sub.add_parser("universe")
     s.add_argument("--index", default="nifty 50")
     s.add_argument("--out", default="data/universe.txt")

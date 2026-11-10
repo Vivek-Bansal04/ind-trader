@@ -22,6 +22,7 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `reconcile` | Journal vs broker holdings (Fyers read-only token): reports mismatches, never acts on them |
 | `fill SYM SIDE QTY PX --costs N` | Record an actual fill into the tax ledger |
 | `tax` | FIFO realized P&L + CGT estimate per FY (20%/12.5%, ₹1.25L LTCG exemption; computation only) |
+| `pbacktest [SYMS] --strategy X` | Portfolio-level backtest: shared cash, concurrent positions, regime-scaled exposure |
 | `universe --index "nifty 50" --out data/universe.txt` | Dump live index constituents to a universe file |
 | `regime` | Market traffic-light (breadth + index trend) → recommended exposure 100/60/30% |
 | `ai SYM` | Optional AI view. Works keyless (deterministic factpack); add any model key later |
