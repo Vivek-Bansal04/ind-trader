@@ -381,13 +381,13 @@ ANSWER 7:
 | # | Item | Status | Decides |
 |---|---|---|---|
 | 0 | offline suite on current checkout | **PASS** (174+1 skip, macOS 3.13) | platform support claim — closed |
-| 1 | network reachability | PARTIAL — Yahoo YES; NSE direct 403 even at home; nseapi archive 0 rows | yfinance is the backfill backbone for real; nseapi daily() broken/unknown |
-| 2 | live fetch/backtest/universe/health | PARTIAL — RELIANCE 2927 rows, both universes (50/500), feeds 2743 rows; NIFTY never fetched so health never ran | universe sources work; acceptance gate still open (needs NIFTY + completed fetch-universe + --adjusted run) |
-| 3 | bhavcopy contract | PARTIAL — `equity_bhavcopy(date)` → CSV path, 10/10 price match; column list never printed | contract-test waits on the columns: line |
-| 4 | yfinance Adj Close shape | PARTIAL — Yahoo adj usable (ITC drift clean); SBIN premise wrong, so split behavior untested | adj_factors split handling waits on a real split window |
-| 5 | NSE calendar/scrip methods | OPEN — names found (`holidays`, `HOLIDAY_TRADING`, `get_detailed_scrip_data`); shapes + historical-data signature not dumped | wire vs record-reject + whether nseapi earns its fetch-chain slot |
-| 6 | pypfopt combo | OPEN — commit msg says broken on scipy 1.18.1; output not pasted | pin or keep the inverse-vol fallback |
-| 7 | paper loop first run | BLOCKED — a TypeError in scan/notify was reported, traceback not received | Phase-4 clock start |
+| 1 | network reachability | **SETTLED** — Yahoo YES; NSE direct 403 even at home; nseapi historical returns rows (round-2 signature probe: `date` objects OK, 10 rows) — round-1 "0 rows" was our key-parse dropping every row, now raises naming the real keys | yfinance backfill backbone; nseapi demoted until its row keys are seen live |
+| 2 | live fetch/backtest/universe/health | **PARTIAL-OK** — NIFTY 2918 rows (user's ^NSEI fix), adjusted costed backtest real, health runs vs NIFTY calendar (472/500 gaps = unfinished backfill, honest), scan+notify green | acceptance completes when fetch-universe finishes + contract-test passes |
+| 3 | bhavcopy contract | **CLOSED** — 34 cols: `TckrSymb`/`ClsPric`/`SctySrs`/`FinInstrmTp`; prices match; file only post-settlement (11-10 unavailable on 11-11) | built: `contract-test` command (fixtures = this real shape) |
+| 4 | yfinance Adj Close shape | **PARTIAL** — splits found live (HDFCBANK 2.0 on 2025-08-26 inside our window!); ratio-step probe over that window still pending | adj_factors split check with a known-good window |
+| 5 | NSE calendar/scrip methods | **CLOSED** — `holidays()` = {CBM: [{tradingDate dd-Mon-yyyy, ...}]}; no scrip-master method (`get_detailed_scrip_data` is quote data) → scrip-master feature REJECTED, ISIN map comes from bhavcopy's ISIN column instead | built: `holidays` command + cross-check |
+| 6 | pypfopt combo | **DECIDED** — broken on scipy 1.18.1 + pypfopt 1.6.0 (traceback seen); inverse_vol fallback stays, HRP marked unavailable until a pin is proven | weights() status quo, decision documented |
+| 7 | paper loop first run | **READY** — 2026-11-11 scan+notify produced a real shortlist (LAURUSLABS/GLAND/... + regime NEUTRAL breadth 75%); telegram not configured is the only missing wire | Phase-4 clock starts whenever the 20-day discipline begins |
 
 ---
 

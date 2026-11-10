@@ -42,15 +42,13 @@ class NseIndiaApiProvider:
         return NSE(download_folder=self.download_folder)
 
     def daily(self, symbol: str, start: str, end: str) -> pd.DataFrame:
-        from nse import NSE  # lazy: keeps import optional
-
         from_d = self._as_date(start)
         to_d = self._as_date(end)
-        with NSE(download_folder=self.download_folder) as nse:
+        with self.client() as nse:
             rows = nse.fetch_equity_historical_data(symbol.upper(), from_date=from_d, to_date=to_d)
         if not rows:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-        records = []
+        records, dropped = [], 0
         for r in rows:
             try:
                 records.append(
@@ -64,9 +62,18 @@ class NseIndiaApiProvider:
                     }
                 )
             except (KeyError, TypeError, ValueError):
-                continue  # partial rows from NSE are dropped, loud enough via row-count check
+                dropped += 1
+        if records and dropped > len(records):
+            # partial key drift: report but keep what parsed
+            print(f"[nseapi] {symbol}: dropped {dropped}/{dropped + len(records)} rows on key parse")
         if not records:
-            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+            # rows arrived but NOTHING parsed — the response-key contract changed.
+            # Returning empty here would silently fake "no such data" (the round-1
+            # "0 rows" mystery was exactly this). Name the keys instead.
+            sample = rows[0] if isinstance(rows[0], dict) else type(rows[0]).__name__
+            raise RuntimeError(
+                f"nseapi {symbol}: {len(rows)} rows arrived but 0 parsed — response keys "
+                f"changed; first row keys: {sorted(sample) if isinstance(sample, dict) else sample}")
         df = pd.DataFrame(records).set_index("date").sort_index()
         return clean_daily(df, symbol)
 

@@ -38,6 +38,8 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `rebalance --file targets.json` | Monthly rebalance proposals vs target weights with the tax lens on every sell; unknown marks size 0, never guessed; proposals only |
 | `riskreport` | Weekly report: regime light + flip/FTD note, book XIRR + concentration, journal counts, universe data health |
 | `health` | Data-health gate vs the NIFTY session calendar: rows, gaps, staleness, adj coverage; exit 1 on breaches |
+| `contract-test` | Phase-1 acceptance: store closes vs NSE's own bhavcopy (`TckrSymb`/`ClsPric` contract, captured live — never guessed); names every mismatch, exit 1 on any |
+| `holidays` | NSE CBM trading-holiday calendar + cross-check that no holiday has a NIFTY bar |
 | `fetch-adj` | Store corporate-action factors (yfinance Adj Close/Close); `backtest --adjusted` uses them, warns on RAW fallback |
 | `ann` | Announcement triage for HOLDINGS only: RED (fraud/pledge-encroachment/NCLT…) vs AMBER keywords; empty book = empty alert, never a firehose |
 | `events [SYM --qty N]` | Results calendar + the plan's event rule: no fresh entry ≤2 sessions before earnings, half size ≤5; unknown date = guard off, stated |
