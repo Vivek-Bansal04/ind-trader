@@ -41,3 +41,45 @@ def test_no_bench_still_works():
     out = scan({"A": mk(seed=2), "B": mk(seed=4)}, bench=None)
     assert set(out["quadrant"]) == {"NA"}
     assert len(out) == 2
+
+
+def _flat_volume(n=300, v=2e6):
+    idx = pd.bdate_range("2023-01-01", periods=n)
+    return pd.Series(v, index=idx)
+
+
+def test_illiquid_name_dropped_even_when_trend_is_perfect():
+    win = mk(300, 0.002, seed=2)
+    # price ~150 avg; 2e6 sh/day * ~150 = ~30Cr -> comfortably above the 2Cr floor
+    good = scan({"W": win}, bench=mk(300, 0.0003, seed=9), volumes={"W": _flat_volume()})
+    assert bool(good.iloc[0]["tradable"]) and good.iloc[0]["turnover_20d"] > 2e7
+    # 200 sh/day * ~150 = ~30k/day -> far under the floor
+    ill = scan({"W": win}, bench=mk(300, 0.0003, seed=9), volumes={"W": _flat_volume(v=200)})
+    assert not bool(ill.iloc[0]["tradable"]) and "illiquid" in ill.iloc[0]["note"]
+    assert ill.iloc[0]["turnover_20d"] < 2e7
+
+
+def test_unknown_volume_never_disqualifies():
+    win = mk(300, 0.002, seed=2)
+    out = scan({"W": win}, bench=mk(300, 0.0003, seed=9))  # no volumes passed at all
+    assert bool(out.iloc[0]["tradable"]) and pd.isna(out.iloc[0]["turnover_20d"])
+
+
+def test_one_volume_spike_cannot_launder_an_illiquid_name():
+    win = mk(300, 0.002, seed=2)
+    v = _flat_volume(v=200)
+    v.iloc[-1] = 2e5  # 1000x day — a printed print; 20-day mean is still far under floor
+    out = scan({"W": win}, bench=mk(300, 0.0003, seed=9), volumes={"W": v})
+    assert not bool(out.iloc[0]["tradable"])
+
+
+def test_flip_note_names_thresholds_and_counts():
+    from indtrader.research.regime import Regime, flip_note
+
+    assert flip_note(None) == ""
+    on = flip_note(Regime("ON", 1.0, 0.7, True, index_sma200=24000.0, universe_n=100))
+    assert "breadth 70%" in on and "35%" in on and "35 of 100" in on
+    off = flip_note(Regime("OFF", 0.3, 0.2, False, index_sma200=24000.0, universe_n=100))
+    assert "60%" in off and "40 more of 100" in off and "24,000" in off
+    neut = flip_note(Regime("NEUTRAL", 0.6, None, None))
+    assert "breadth unknown" in neut  # unknown stated as unknown, not assumed fine

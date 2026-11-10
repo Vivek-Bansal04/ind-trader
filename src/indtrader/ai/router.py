@@ -24,6 +24,7 @@ def parse_insight(provider: str, text: str) -> AIInsight:
             confidence=max(0, min(100, conf)),
             summary=str(obj.get("summary", ""))[:600],
             risks=str(obj.get("risks", ""))[:400],
+            watch_for=str(obj.get("what_would_change_the_view", ""))[:300],
         )
     except Exception:
         return AIInsight(provider=provider, verdict="UNPARSEABLE", confidence=0,

@@ -14,6 +14,7 @@ class AIInsight:
     confidence: int  # 0..100
     summary: str
     risks: str
+    watch_for: str = ""  # "what would change the view" — falsifier from the model
 
 
 class AIProvider(Protocol):

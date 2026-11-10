@@ -10,6 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import ceil
 
+# --- embedded constants must carry an as-of date; tools/check_freshness.py tracks them
+RATES_AS_OF = "2026-11-01"  # NSE/SEBI cash-segment schedule date used below
+
 STT_BUY = 0.001          # 0.1% on buy (delivery, intraday same)
 STT_SELL = 0.001         # 0.1% on sell
 EXCHANGE_TXN = 0.0000297  # NSE 0.00297% (turnover charges); BSE similar

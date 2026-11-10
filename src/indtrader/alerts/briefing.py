@@ -12,6 +12,7 @@ import pandas as pd
 from indtrader.alerts.telegram import inr, send
 from indtrader.config import Settings, get_settings
 from indtrader.data.universe import load_universe
+from indtrader.research.regime import flip_note
 
 TOP = 5
 
@@ -41,6 +42,9 @@ def format_briefing(day: str, regime, table: pd.DataFrame | None, missing: list[
             lines.append(" - " + "  ".join(bits) + (f"  [{note}]" if note else ""))
     if missing:
         lines.append(f"no data: {', '.join(missing[:8])}")
+    note = flip_note(regime)
+    if note:
+        lines.append(note)
     return "\n".join(lines)
 
 
@@ -53,13 +57,14 @@ def build_briefing(settings: Settings | None = None) -> str:
     s = settings or get_settings()
     store = BarStore()
     try:
-        closes, extras, missing = {}, {}, []
+        closes, volumes, extras, missing = {}, {}, {}, []
         for sym in load_universe(s.data_dir / "universe.txt"):
             df = store.load(sym)
             if df.empty:
                 missing.append(sym)
                 continue
             closes[sym] = df["close"]
+            volumes[sym] = df["volume"]
             extra = {"deliv_per": feeds.latest_delivery_per(store, sym),
                      "deliv_avg": feeds.avg_delivery_per(store, sym),
                      "net_bulk": feeds.net_bulk_value(store, sym)}
@@ -73,7 +78,8 @@ def build_briefing(settings: Settings | None = None) -> str:
             else:
                 regime = classify(fraction_above_200dma(closes), None)
         table = scan(closes, bench=(idx["close"] if not idx.empty else None),
-                     regime=regime, top=TOP, extras=extras) if closes else None
+                     regime=regime, top=TOP, extras=extras,
+                     volumes=volumes) if closes else None
         return format_briefing(str(date.today()), regime, table, missing=missing)
     finally:
         store.close()

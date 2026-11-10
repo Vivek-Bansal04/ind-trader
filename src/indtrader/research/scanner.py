@@ -22,9 +22,26 @@ from indtrader.ta import annualized_vol, rsi, sma
 
 QUADRANT_SCORE = {"Improving": 2.0, "Leading": 1.5, "Weakening": 0.0, "Lagging": -1.0, "NA": 0.0}
 
+# ₹/day average turnover over the 20 sessions BEFORE the signal day (close*volume proxy).
+# A swing position must be enterable and exitable; one spike-day of volume cannot launder
+# an illiquid name into the shortlist — the window deliberately ends at the signal, not after.
+LIQUIDITY_FLOOR_TURNOVER = 2e7  # 2 crore/day
+
+
+def liquidity_ok(closes: pd.Series, volume: pd.Series | None) -> tuple[bool, float | None]:
+    """(passes_floor, avg_turnover). Missing volume data -> (True, None): unknown does
+    not disqualify here — it only qualifies loudly when present and below the floor."""
+    if volume is None:
+        return True, None
+    joined = pd.concat([closes.dropna(), volume.dropna()], axis=1, join="inner").tail(20)
+    if len(joined) < 10:
+        return True, None
+    turn = float((joined.iloc[:, 0] * joined.iloc[:, 1]).mean())
+    return turn >= LIQUIDITY_FLOOR_TURNOVER, turn
+
 
 def evidence_row(symbol: str, closes: pd.Series, bench: pd.Series | None,
-                 extra: dict | None = None) -> dict:
+                 extra: dict | None = None, volume: pd.Series | None = None) -> dict:
     """One symbol's full evidence record. NaN-tolerant: short history just scores 0.
 
     `extra` carries store-derived feeds (delivery %, net bulk value) — attached and
@@ -69,19 +86,28 @@ def evidence_row(symbol: str, closes: pd.Series, bench: pd.Series | None,
         dp, da = extra.get("deliv_per"), extra.get("deliv_avg")
         if dp is not None and da is not None and above and dp < min(da, 40.0):
             row["note"] = "low delivery on trend"
+    liq_ok, turn = liquidity_ok(c, volume)
+    row["turnover_20d"] = None if turn is None else round(turn)
+    if not liq_ok:
+        row["tradable"] = False
+        row["note"] = (row["note"] + "; " if row["note"] else "") + "illiquid (<2Cr/day)"
     return row
 
 
 def scan(closes: dict[str, pd.Series], bench: pd.Series | None = None,
          regime: Regime | None = None, top: int = 10,
-         extras: dict[str, dict] | None = None) -> pd.DataFrame:
+         extras: dict[str, dict] | None = None,
+         volumes: dict[str, pd.Series] | None = None) -> pd.DataFrame:
     """Evidence table for the whole universe, best candidates first.
 
     extras: {symbol: {deliv_per, deliv_avg, net_bulk}} — from data.feeds readers.
     Only net positive bulk buying boosts (+0.5); low delivery only annotates.
     Missing feeds score/annotate nothing — unknown must never look like evidence.
+    volumes: {symbol: volume series} — feeds the liquidity floor; absent = unknown,
+    which never disqualifies but is shown as such (turnover_20d = None).
     """
-    rows = [evidence_row(sym, c, bench, extra=(extras or {}).get(sym))
+    rows = [evidence_row(sym, c, bench, extra=(extras or {}).get(sym),
+                         volume=(volumes or {}).get(sym))
             for sym, c in sorted(closes.items())]
     df = pd.DataFrame(rows)
     df["score"] = 0.0

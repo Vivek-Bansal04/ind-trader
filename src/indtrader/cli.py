@@ -78,7 +78,7 @@ def cmd_rrg(args) -> int:
 
 
 def cmd_regime(args) -> int:
-    from indtrader.research.regime import regime_from_data
+    from indtrader.research.regime import flip_note, regime_from_data
 
     store = BarStore()
     closes = {}
@@ -92,22 +92,24 @@ def cmd_regime(args) -> int:
         return 1
     r = regime_from_data(closes, idx["close"])
     print(f"regime={r.label} exposure_scale={r.exposure_scale} breadth={r.breadth} index_trend_up={r.index_trend_up}")
+    print(flip_note(r))
     return 0
 
 
 def cmd_scan(args) -> int:
     from indtrader.data import feeds
-    from indtrader.research.regime import regime_from_data
+    from indtrader.research.regime import flip_note, regime_from_data
     from indtrader.research.scanner import scan
 
     store = BarStore()
-    closes, missing, extras = {}, [], {}
+    closes, volumes, missing, extras = {}, {}, [], {}
     for sym in load_universe(args.file):
         df = _load_or_fetch(store, sym)
         if df.empty:
             missing.append(sym)
             continue
         closes[sym] = df["close"]
+        volumes[sym] = df["volume"]
         extra = {
             "deliv_per": feeds.latest_delivery_per(store, sym),
             "deliv_avg": feeds.avg_delivery_per(store, sym),
@@ -122,9 +124,11 @@ def cmd_scan(args) -> int:
             print("missing:", ", ".join(missing), file=sys.stderr)
         return 1
     regime = regime_from_data(closes, idx["close"])
-    table = scan(closes, bench=idx["close"], regime=regime, top=args.top, extras=extras)
+    table = scan(closes, bench=idx["close"], regime=regime, top=args.top, extras=extras,
+                 volumes=volumes)
     print(f"regime={regime.label} exposure_scale={regime.exposure_scale} "
           f"breadth={None if regime.breadth is None else round(regime.breadth, 2)}")
+    print(flip_note(regime))
     print(table.to_string(index=False))
     if missing:
         print(f"[scan] no data for: {', '.join(missing)}")
@@ -133,8 +137,8 @@ def cmd_scan(args) -> int:
 
         log = PlanLog()
         picks = table[table["tradable"] == True].head(args.top)  # noqa: E712
-        cols = [c for c in ("symbol", "score", "quadrant", "mom_6m", "deliv_per", "net_bulk", "note")
-                if c in table.columns]
+        cols = [c for c in ("symbol", "score", "quadrant", "mom_6m", "deliv_per", "net_bulk",
+                            "turnover_20d", "note") if c in table.columns]
         log.record_signal(
             "UNIVERSE", "scan",
             {"regime": regime.label, "exposure_scale": regime.exposure_scale,
@@ -295,6 +299,8 @@ def cmd_ai(args) -> int:
         print("Set a key in .env and AI_PROVIDER_ORDER to enable models.")
         return 0
     print(f"[{insight.provider}] {insight.verdict} (conf {insight.confidence}) — {insight.summary}\nRisks: {insight.risks}")
+    if insight.watch_for:
+        print(f"Watches for: {insight.watch_for}")
     return 0
 
 

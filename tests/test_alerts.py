@@ -74,6 +74,7 @@ def test_briefing_format_full():
     assert "Regime ON | exposure 1" in text and "breadth 0.66" in text
     assert "WIN" in text and "+14.1Cr" in text and "deliv 62%" in text
     assert "FLAT" not in text.split("Shortlist:")[1]  # below trend gate, not listed
+    assert "turns OFF if" in text                     # flip-level footer present
 
 
 def test_briefing_format_empty_store():

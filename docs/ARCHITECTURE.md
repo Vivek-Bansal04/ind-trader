@@ -36,6 +36,7 @@ ETL (providers) -> BarStore (sqlite, validated) -> strategies(signals on closed 
 | Store | mftool cache lessons + engine's JSON-cache weakness | sqlite of record, idempotent upserts, validate-on-read |
 | Evidence feeds (delivery %, bulk deals) | NSE bhavcopy/deal reports themselves (public data) via NseIndiaApi; delivery-%-as-signal is common Indian-practice lore, not paper-backed | parsers written offline against real response shapes; low delivery only annotates, net bulk buys only boost — neither can trigger a trade; unknown ≠ zero |
 | Walk-forward / plateau | standard WF validation; CPCV upgrade planned | overfit ratio + parameter-plateau gate before any strategy goes live |
+| Second-wave audit (Nov 2026, top-6 recommendation repos) | `claude-trading-skills-india` (MIT, 8/10) contributed three: freshness-CI for embedded constants, LLM grounding rules + prompt-contract evals, regime "flip levels" note; liquidity-floor-before-signal is the same spirit | `tools/check_freshness.py` + monthly workflow (rates/tax slabs carry `*_AS_OF`, stale ⇒ issue opened automatically); SYSTEM prompt demands traceable-to-field statements and a falsifier; liquidity measured over the 20 sessions BEFORE the signal. Rejected from that cohort: ML price forecasting (all three practitioners leak scaling or score on the train set), tweet sentiment, closed-backend paper trading (Foursight), circuit-band guessing (needs thresholds we'd have to invent) |
 
 ## Research encoded as defaults
 

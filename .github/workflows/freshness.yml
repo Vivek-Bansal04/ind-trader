@@ -1,0 +1,45 @@
+name: freshness
+
+# Monthly sweep: embedded Indian market constants (rates, tax slabs) must stay current.
+on:
+  schedule:
+    - cron: "17 6 1 * *"   # 06:17 UTC on the 1st monthly
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check as-of dates
+        id: fresh
+        run: |
+          python tools/check_freshness.py --json > fresh.json
+          echo "stale=false" >> "$GITHUB_OUTPUT"
+        continue-on-error: true
+      - name: Report
+        run: cat fresh.json || python tools/check_freshness.py || true
+      - name: Open issue when stale
+        if: steps.fresh.outcome == 'failure'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            let body = 'Freshness check failed — see workflow log.';
+            try {
+              const j = JSON.parse(fs.readFileSync('fresh.json', 'utf8'));
+              body = 'Embedded market constants went stale. Verify against current NSE/SEBI/Finance-Act schedules and bump the `*_AS_OF` dates:\n\n'
+                + j.stale.map(s => `- \`${s.name}\` (${s.path}) as_of=${s.as_of}, age ${s.age_days ?? '?'}d`).join('\n');
+            } catch (e) {}
+            const { data } = await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title: 'Freshness: embedded market constants need re-verification',
+              body, labels: ['automated'],
+            });
+            core.info('opened issue ' + data.number);

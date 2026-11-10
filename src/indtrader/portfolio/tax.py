@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from datetime import date
 
 MONTHS_IN_A_YEAR = 12
+# Finance Act 2024 (Jul-2024) slabs encoded below; freshness CI tracks this date.
+TAX_SLABS_AS_OF = "2026-11-01"
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,7 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `fetch RELIANCE` / `fetch-universe` | Download daily candles into the local store (NSE archive via NseIndiaApi, Yahoo fallback) |
 | `backtest SYM --strategy X --costs` | Daily-bar backtest with real Indian delivery costs and next-bar-open fills |
 | `rrg SYM SYM ... --bench NIFTY` | Clean-room Relative Rotation Graph: quadrant + quadrant transitions |
-| `scan` | Universe shortlist: one evidence row per symbol (trend, RRG quadrant, 6m momentum, delivery %, bulk deals, vol), ranked; shortlist journaled to `plans.sqlite` |
+| `scan` | Universe shortlist: one evidence row per symbol (trend, RRG quadrant, 6m momentum, delivery %, bulk deals, 20d turnover, vol), ranked; illiquid names (<₹2Cr/day before the signal) dropped; shortlist journaled to `plans.sqlite` |
 | `fetch-feeds` | Nightly evidence refresh: delivery-% bhavcopy + bulk deals (NSE; keeps last-known when unreachable) |
 | `notify` | Evening briefing (regime + shortlist): sends to Telegram when configured, prints otherwise |
 | `reconcile` | Journal vs broker holdings (Fyers read-only token): reports mismatches, never acts on them |
@@ -24,7 +24,7 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `tax` | FIFO realized P&L + CGT estimate per FY (20%/12.5%, ₹1.25L LTCG exemption; computation only) |
 | `pbacktest [SYMS] --strategy X` | Portfolio-level backtest: shared cash, concurrent positions, regime-scaled exposure |
 | `universe --index "nifty 50" --out data/universe.txt` | Dump live index constituents to a universe file |
-| `regime` | Market traffic-light (breadth + index trend) → recommended exposure 100/60/30% |
+| `regime` | Market traffic-light (breadth + index trend) → recommended exposure 100/60/30%, plus the exact levels that would flip the light |
 | `ai SYM` | Optional AI view. Works keyless (deterministic factpack); add any model key later |
 | `run_daily` (Docker loop) | Nightly 16:05 IST ETL, idempotent upserts |
 
@@ -71,6 +71,7 @@ trail for each is in `docs/ARCHITECTURE.md`):
 | NAV/mutual-fund layer (Phase 6) | `mftool` (MIT) | will vendor parser+cache only, replace its fake "IRR" with the real tested XIRR already here |
 | Strategy defaults | Research: Faber 200-DMA, Moskowitz TSM, Barroso–Santa-Clara vol-scaling, Antonacci dual momentum | all long-only, SMA200-gated, daily |
 | Validation | walk-forward practice; overfit ratio | + parameter-plateau gate before anything goes live |
+| Freshness CI, AI grounding rules, regime flip-note, pre-signal liquidity floor | second-wave audit (Nov 2026): `claude-trading-skills-india` (MIT) + its fail-loud philosophy | `*_AS_OF` markers with monthly auto-issue workflow; strict grounding SYSTEM prompt + offline contract evals; flip levels name counts, not vibes; turnover floor over the 20 sessions **before** the signal |
 
 **Excluded on purpose:** `Indian-Stock-Market-API` (no candles, no license), Tapetide
 MCP (closed SaaS), the RRG repo's code (unlicensed), all intraday/1-minute/ORB/scalping
@@ -101,9 +102,11 @@ strictly, can be rejected, and can never size or place a trade.
 
 ## Status & roadmap
 
-Implemented: data chain + store, costs, backtester + 6 strategies, RRG, regime, scanner,
-evidence feeds (delivery/bulk deals), sizing/limits, journal, tax ledger (FIFO + CGT),
-Fyers read-only reconciliation, Telegram briefings, ETL+Docker, AI router.
-Next (see `../build-plan.md`): loss set-off/carry-forward in the tax engine, portfolio-
-level concurrent backtest, Angel One read-only adapter, shareholding/fundamentals feeds,
-XIRR wiring for the mutual-fund leg (mftool vendor).
+Implemented: data chain + store, costs, backtester + 6 strategies, portfolio-level backtest,
+RRG, regime (+ flip levels), scanner (+ pre-signal liquidity floor), evidence feeds
+(delivery/bulk deals), sizing/limits, journal, tax ledger (FIFO + CGT), Fyers read-only
+reconciliation, Telegram briefings, ETL+Docker, AI router (+ grounding rules, contract
+evals, falsifier field), freshness CI.
+Next (see `../build-plan.md`): loss set-off/carry-forward in the tax engine, Angel One
+read-only adapter, shareholding/fundamentals feeds (screener.in design), weekly support-
+band regime gate, PPA compression scanner, ISIN scrip master.
