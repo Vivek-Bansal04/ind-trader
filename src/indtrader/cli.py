@@ -101,6 +101,7 @@ def cmd_regime(args) -> int:
 
 def cmd_scan(args) -> int:
     from indtrader.data import feeds
+    from indtrader.research import events
     from indtrader.research.regime import flip_note, regime_from_data
     from indtrader.research.scanner import scan
 
@@ -118,6 +119,7 @@ def cmd_scan(args) -> int:
             "deliv_per": feeds.latest_delivery_per(store, sym),
             "deliv_avg": feeds.avg_delivery_per(store, sym),
             "net_bulk": feeds.net_bulk_value(store, sym),
+            "results_in": events.sessions_until(store, sym, args.index),
         }
         if any(v is not None for v in extra.values()):
             extras[sym] = extra
@@ -284,7 +286,7 @@ def cmd_fill(args) -> int:
 
 def cmd_tax(args) -> int:
     from indtrader.execution.planlog import PlanLog
-    from indtrader.portfolio.tax import realize, tax_summary
+    from indtrader.portfolio.tax import realize, tax_summary, tax_summary_with_setoff
 
     log = PlanLog()
     entries = log.fills()
@@ -297,12 +299,99 @@ def cmd_tax(args) -> int:
     for m_e in entries:  # reopen books just to show what's still held
         open_pos[m_e.symbol.upper()] = open_pos.get(m_e.symbol.upper(), 0) + (m_e.qty if m_e.side.upper() == "BUY" else -m_e.qty)
     print(f"{len(entries)} fills -> {len(matches)} realized lots")
-    for fy in tax_summary(matches):
-        for line in fy.lines():
-            print(line)
+    if args.setoff:
+        for t in tax_summary_with_setoff(matches):
+            print(f"{t.financial_year}: net STCG {t.stcg_net:,.0f} | net LTCG {t.ltcg_net:,.0f}"
+                  f" | brought losses used: STCG {t.used_brought_stcl:,.0f} LTCG {t.used_brought_ltlg:,.0f}"
+                  f" -> taxable {t.taxable_stcg:,.0f} + {t.taxable_ltcg:,.0f}"
+                  f" (exemption used {t.exemption_used:,.0f}) = tax {t.tax_total:,.0f}")
+            if t.carry_stcg_out or t.carry_ltcg_out:
+                print(f"   carry forward: STCG {t.carry_stcg_out:,.0f} LTCG {t.carry_ltcg_out:,.0f}"
+                      + (f" | {t.note}" if t.note else ""))
+        print("(set-off order + 8-year expiry per documented simplifications; ITR-order approximation)")
+    else:
+        for fy in tax_summary(matches):
+            for line in fy.lines():
+                print(line)
     held = {s: q for s, q in sorted(open_pos.items()) if q > 0}
     print("still held:", held if held else "nothing")
     print("computation only — verify with your CA before filing.")
+    return 0
+
+
+def _held_symbols() -> list[str]:
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio.valuation import held_quantities
+
+    log = PlanLog()
+    try:
+        return sorted(held_quantities(log.fills()))
+    finally:
+        log.close()
+
+
+def cmd_ann(args) -> int:
+    """Announcement triage for the holdings only. Fetches when a live NSE lib exists;
+    triages what's stored either way; alerts over Telegram when configured and asked."""
+    from indtrader.data import announce
+    from indtrader.data.store import BarStore
+
+    store = BarStore()
+    try:
+        if not args.no_fetch:
+            res = announce.fetch_announcements(_held_symbols(), store)
+            print(f"[ann] fetch: {res}")
+        matches = announce.triaged_recent(store, _held_symbols(), days=args.days)
+        text = announce.format_alert(matches)
+        print(text)
+        if args.telegram:
+            from indtrader.alerts.telegram import send
+            from indtrader.config import get_settings
+            s = get_settings()
+            if s.telegram_bot_token.strip() and s.telegram_chat_id.strip() and matches:
+                ok, why = send(text, s)
+                print(f"[ann] telegram {'sent' if ok else 'not sent'}: {why} "
+                      f"({sum(1 for m in matches if m.severity == 'RED')} RED)")
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_events(args) -> int:
+    """Results calendar: store/surface dates and the plan's size rule per symbol."""
+    from indtrader.data.store import BarStore
+    from indtrader.research import events
+
+    store = BarStore()
+    try:
+        if not args.no_fetch:
+            print(f"[events] fetch: {events.fetch_results_calendar(store)}")
+        if args.symbol:
+            qty, note = events.size_gate(store, args.symbol.upper(), args.qty)
+            print(f"{args.symbol.upper()}: {note} -> allowed qty {qty} (of {args.qty})")
+            return 0
+        rows = store.con.execute(
+            "SELECT symbol, d FROM events WHERE kind='results' AND d >= date('now') ORDER BY d"
+        ).fetchall() if store.con.execute(
+            "SELECT name FROM sqlite_master WHERE name='events'").fetchone() else []
+        print("upcoming results:", ", ".join(f"{s} {d}" for s, d in rows[:40]) or
+              "none stored (fetch on a normal network)")
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_review(args) -> int:
+    from indtrader.alerts.review import build_weekly_review
+    from indtrader.alerts.telegram import send
+    from indtrader.config import get_settings
+
+    text = build_weekly_review()
+    print(text)
+    s = get_settings()
+    if not args.no_telegram and s.telegram_bot_token.strip() and s.telegram_chat_id.strip():
+        ok, why = send(text, s)
+        print(f"[review] telegram {'sent' if ok else 'not sent'}: {why}")
     return 0
 
 
@@ -510,7 +599,22 @@ def main(argv=None) -> int:
     s.add_argument("--note", default="")
     s.set_defaults(fn=cmd_fill)
     s = sub.add_parser("tax", help="FIFO realized P&L + CGT estimate per financial year")
+    s.add_argument("--setoff", action="store_true",
+                   help="apply loss set-off order + 8-year carry-forward instead of the upper bound")
     s.set_defaults(fn=cmd_tax)
+    s = sub.add_parser("ann", help="announcement triage for holdings only (RED/AMBER keywords)")
+    s.add_argument("--days", type=int, default=30)
+    s.add_argument("--no-fetch", action="store_true", help="triage stored rows only")
+    s.add_argument("--telegram", action="store_true", help="also send the alert when configured")
+    s.set_defaults(fn=cmd_ann)
+    s = sub.add_parser("events", help="results calendar + the no-entry/half-size plan rule")
+    s.add_argument("symbol", nargs="?")
+    s.add_argument("--qty", type=int, default=0, help="proposed qty to run through the size gate")
+    s.add_argument("--no-fetch", action="store_true")
+    s.set_defaults(fn=cmd_events)
+    s = sub.add_parser("review", help="Sunday weekly review (market, book vs plans, journal, alerts, health)")
+    s.add_argument("--no-telegram", action="store_true")
+    s.set_defaults(fn=cmd_review)
     s = sub.add_parser("pbacktest", help="portfolio-level backtest: shared cash, concurrent positions")
     s.add_argument("symbols", nargs="*")
     s.add_argument("--file", default=None)

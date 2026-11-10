@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from indtrader.models import OrderPlan
@@ -41,14 +41,14 @@ class PlanLog:
     def record_signal(self, symbol: str, source: str, payload: dict) -> None:
         self.con.execute(
             "INSERT INTO signals VALUES (?,?,?,?,?)".replace("?,?,", "?,?,?,").replace("?,)", "?)"),
-            (datetime.utcnow().isoformat(sep=" "), symbol.upper(), source, json.dumps(payload, default=str)),
+            (datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" "), symbol.upper(), source, json.dumps(payload, default=str)),
         )
         self.con.commit()
 
     def add_plan(self, plan: OrderPlan) -> int:
         cur = self.con.execute(
             "INSERT INTO plans(created,symbol,action,qty,entry,stop,target,reason,setup) VALUES (?,?,?,?,?,?,?,?,?)",
-            (datetime.utcnow().isoformat(sep=" "), plan.symbol.upper(), plan.action.upper(), plan.qty, plan.entry, plan.stop,
+            (datetime.now(timezone.utc).replace(tzinfo=None).isoformat(sep=" "), plan.symbol.upper(), plan.action.upper(), plan.qty, plan.entry, plan.stop,
              plan.target, plan.reason, plan.setup),
         )
         self.con.commit()

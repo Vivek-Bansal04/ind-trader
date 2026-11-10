@@ -121,6 +121,10 @@ def evidence_row(symbol: str, closes: pd.Series, bench: pd.Series | None,
         dp, da = extra.get("deliv_per"), extra.get("deliv_avg")
         if dp is not None and da is not None and above and dp < min(da, 40.0):
             row["note"] = "low delivery on trend"
+        ri = extra.get("results_in")
+        if ri is not None and ri <= 5 and above:  # plan rule, shown not enforced-by-force
+            tag = "results <=2d: no fresh entry" if ri <= 2 else f"results in {ri}d: half size"
+            row["note"] = (row["note"] + "; " if row["note"] else "") + tag
     liq_ok, turn = liquidity_ok(c, volume)
     row["turnover_20d"] = None if turn is None else round(turn)
     if not liq_ok:

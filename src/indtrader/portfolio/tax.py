@@ -5,9 +5,9 @@ Rules encoded (equity, no-STT case excluded — every delivery trade pays STT he
 - LTCG exemption Rs 1.25 lakh per financial year (April-March)
 - FIFO matching (the accepted method for equities)
 - sell-side costs reduce the gain, buy-side costs increase the cost basis
-Deliberately NOT implemented (yet, documented): loss set-off order and 8-year
-carry-forward — losses are reported, not applied, so the number shown is the
-upper bound of tax, never an under-estimate. This is computation, not advice.
+Deliberately excluded: nothing on losses — tax_summary() reports the no-set-off upper
+bound, tax_summary_with_setoff() does the real chronological set-off with 8-year
+carry-forward (documented simplifications, see there). Computation, not advice.
 """
 from __future__ import annotations
 
@@ -125,4 +125,125 @@ def tax_summary(matches: list[RealizedMatch]) -> list[FyTax]:
             FyTax(fy, round(stcg, 2), round(ltcg, 2), round(ltcg_taxable, 2),
                   round(max(0.0, stcg) * STCG_RATE, 2), round(ltcg_taxable * LTCG_RATE, 2))
         )
+    return out
+
+
+# --- loss set-off + 8-year carry-forward (the sequence ITR return-preparation uses) ---
+# Documented simplifications: no inter-bucket detail beyond the statutory rule that
+# STCG(111A) losses can absorb LTCG(112) but NOT vice versa; brought-forward losses are
+# applied after intrayear set-off; carry ages by calendar years but the FY1->FY2 expiry
+# boundary is approximated by processing year. This is computation, not advice — verify
+# against your CA.
+
+SET_OFF_YEARS = 8
+
+
+@dataclass(frozen=True)
+class FySetOff:
+    financial_year: str
+    stcg_net: float            # raw net STCG this year (sign kept)
+    ltcg_net: float
+    used_brought_stcl: float   # carried-in STCG losses applied
+    used_brought_ltlg: float
+    taxable_stcg: float
+    taxable_ltcg: float        # after set-off and Rs 1.25L exemption
+    exemption_used: float
+    tax_total: float
+    carry_stcg_out: float      # losses into next FY (each year ages them; gone after 8)
+    carry_ltcg_out: float
+    note: str = ""
+
+
+def tax_summary_with_setoff(matches: list[RealizedMatch]) -> list[FySetOff]:
+    """Chronological FY walk with loss memory. Returns one row per FY that has P&L,
+    plus nothing when there are no matches — never a zero-filled history."""
+    if not matches:
+        return []
+    per_fy: dict[str, dict[str, float]] = {}
+    for m in matches:
+        d = per_fy.setdefault(fy_of(m.sell_dt), {"stcg": 0.0, "ltcg": 0.0})
+        d["stcg" if m.bucket == "STCG" else "ltcg"] += m.net
+    carry_s: list[list] = []  # [age_years, amount>0] — STCG losses, set-off-able vs STCG then LTCG
+    carry_l: list[list] = []  # LTCG losses, set-off-able vs LTCG only
+    out: list[FySetOff] = []
+    prev_start: int | None = None
+    for fy in sorted(per_fy):
+        # 0. age carry by CALENDAR years since the last FY with P&L (gap years age too —
+        #    a loss must not survive 8+ years just because the book was quiet), then drop
+        #    what has already reached the limit before this year can use it
+        start = int(fy[2:6])
+        expired_s = expired_l = 0.0
+        if prev_start is not None:
+            for lot in carry_s + carry_l:
+                lot[0] += max(0, start - prev_start - 1)
+        expired_s += sum(lot[1] for lot in carry_s if lot[0] >= SET_OFF_YEARS)
+        expired_l += sum(lot[1] for lot in carry_l if lot[0] >= SET_OFF_YEARS)
+        carry_s = [lot for lot in carry_s if lot[0] < SET_OFF_YEARS]
+        carry_l = [lot for lot in carry_l if lot[0] < SET_OFF_YEARS]
+        prev_start = start
+        s, l = per_fy[fy]["stcg"], per_fy[fy]["ltcg"]
+
+        # 1. intrayear: STCG loss absorbs LTCG gain (statutory), not vice versa
+        used_stcl_intrayear = 0.0
+        if s < 0 and l > 0:
+            used_stcl_intrayear = min(-s, l)
+            s += used_stcl_intrayear
+            l -= used_stcl_intrayear
+        # 2. current STCG gains absorb brought STCG losses (oldest first)
+        used_b_s = 0.0
+        if s > 0 and carry_s:
+            for lot in carry_s:
+                take = min(lot[1], s)
+                lot[1] -= take
+                s -= take
+                used_b_s += take
+                if lot[1] <= 1e-9:
+                    lot[1] = 0.0
+            carry_s = [lot for lot in carry_s if lot[1] > 1e-9]
+        # 3. brought-forward STCL may still absorb current LTCG (statutory 111A->112);
+        #    the intrayear pair was already handled in step 1
+        if l > 0 and carry_s:
+            for lot in carry_s:
+                take = min(lot[1], l)
+                lot[1] -= take
+                l -= take
+                used_b_s += take
+            carry_s = [lot for lot in carry_s if lot[1] > 1e-9]
+        # 4. LTCG gains absorb brought LTCG losses
+        used_b_l = 0.0
+        if l > 0 and carry_l:
+            for lot in carry_l:
+                take = min(lot[1], l)
+                lot[1] -= take
+                l -= take
+                used_b_l += take
+            carry_l = [lot for lot in carry_l if lot[1] > 1e-9]
+        # 5. new losses from this year join the carry (incl. the STCG loss already used vs LTCG
+        #    is consumed; only the unconsumed part carries)
+        if s < 0:
+            carry_s.append([0.0, -s])
+        if l < 0:
+            carry_l.append([0.0, -l])
+        # 6. taxable + exemption
+        exemption_used = min(max(l, 0.0), LTCG_EXEMPTION)
+        taxable_l = max(0.0, l - LTCG_EXEMPTION)
+        tax = max(0.0, s) * STCG_RATE + taxable_l * LTCG_RATE
+        # 7. age one year for this FY itself; expiry check (accumulates with any gap-year
+        #    expiry found in step 0). Boundary approximated by processing year — see header.
+        for lot in carry_s + carry_l:
+            lot[0] += 1.0
+        expired_s += sum(lot[1] for lot in carry_s if lot[0] >= SET_OFF_YEARS)
+        expired_l += sum(lot[1] for lot in carry_l if lot[0] >= SET_OFF_YEARS)
+        carry_s = [lot for lot in carry_s if lot[0] < SET_OFF_YEARS]
+        carry_l = [lot for lot in carry_l if lot[0] < SET_OFF_YEARS]
+        note = f"expired after {SET_OFF_YEARS}y: STCG {expired_s:,.0f} LTCG {expired_l:,.0f}" \
+            if expired_s + expired_l > 1 else ""
+        out.append(FySetOff(
+            fy, round(per_fy[fy]["stcg"], 2), round(per_fy[fy]["ltcg"], 2),
+            round(used_b_s, 2), round(used_b_l, 2),
+            round(max(0.0, s), 2), round(taxable_l, 2), round(exemption_used, 2),
+            round(tax, 2),
+            round(sum(lot[1] for lot in carry_s), 2), round(sum(lot[1] for lot in carry_l), 2),
+            note,
+        ))
     return out

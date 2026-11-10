@@ -51,6 +51,7 @@ def format_briefing(day: str, regime, table: pd.DataFrame | None, missing: list[
 def build_briefing(settings: Settings | None = None) -> str:
     from indtrader.data import feeds
     from indtrader.data.store import BarStore
+    from indtrader.research import events
     from indtrader.research.regime import classify, fraction_above_200dma, regime_from_data
     from indtrader.research.scanner import scan
 
@@ -68,7 +69,8 @@ def build_briefing(settings: Settings | None = None) -> str:
             bars[sym] = df
             extra = {"deliv_per": feeds.latest_delivery_per(store, sym),
                      "deliv_avg": feeds.avg_delivery_per(store, sym),
-                     "net_bulk": feeds.net_bulk_value(store, sym)}
+                     "net_bulk": feeds.net_bulk_value(store, sym),
+                     "results_in": events.sessions_until(store, sym)}
             if any(v is not None for v in extra.values()):
                 extras[sym] = extra
         idx = store.load("NIFTY")

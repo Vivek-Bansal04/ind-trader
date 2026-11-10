@@ -21,7 +21,7 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `notify` | Evening briefing (regime + shortlist): sends to Telegram when configured, prints otherwise |
 | `reconcile` | Journal vs broker holdings (Fyers read-only token): reports mismatches, never acts on them |
 | `fill SYM SIDE QTY PX --costs N` | Record an actual fill into the tax ledger |
-| `tax` | FIFO realized P&L + CGT estimate per FY (20%/12.5%, ₹1.25L LTCG exemption; computation only) |
+| `tax` / `tax --setoff` | FIFO realized P&L + CGT per FY (20%/12.5%, ₹1.25L exemption); `--setoff` applies the statutory loss set-off order + 8-year carry-forward instead of the upper bound |
 | `pbacktest [SYMS] --strategy X` | Portfolio-level backtest: shared cash, concurrent positions, regime-scaled exposure |
 | `gate SYMBOL --param period=150,200,250` | Walk-forward + parameter-plateau GATE (OOS/IS ratio, IS floor, plateau): exit 2 = strategy fails, net of costs |
 | `montecarlo SYMBOL --strategy X` | Bootstrap the costed trade PnLs → p5/p50/p95 outcomes, P(loss), worst-5% drawdown; refuses under 20 trades |
@@ -30,6 +30,9 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `riskreport` | Weekly report: regime light + flip/FTD note, book XIRR + concentration, journal counts, universe data health |
 | `health` | Data-health gate vs the NIFTY session calendar: rows, gaps, staleness, adj coverage; exit 1 on breaches |
 | `fetch-adj` | Store corporate-action factors (yfinance Adj Close/Close); `backtest --adjusted` uses them, warns on RAW fallback |
+| `ann` | Announcement triage for HOLDINGS only: RED (fraud/pledge-encroachment/NCLT…) vs AMBER keywords; empty book = empty alert, never a firehose |
+| `events [SYM --qty N]` | Results calendar + the plan's event rule: no fresh entry ≤2 sessions before earnings, half size ≤5; unknown date = guard off, stated |
+| `review` | Sunday review: benchmark week + regime, book vs executed plans (fills without a plan are flagged), journal hygiene, holding announcements, data health |
 | `universe --index "nifty 50" --out data/universe.txt` | Dump live index constituents to a universe file |
 | `regime` | Market traffic-light (breadth + index trend) → recommended exposure 100/60/30%, plus the exact levels that would flip the light and the follow-through (FTD) status |
 | `ai SYM` | Optional AI view. Works keyless (deterministic factpack); add any model key later |
@@ -111,13 +114,17 @@ strictly, can be rejected, and can never size or place a trade.
 
 Implemented: data chain + store, costs, backtester + 6 strategies, portfolio-level backtest,
 walk-forward + plateau GATE, Monte Carlo bootstrap, RRG, regime (+ flip levels, + FTD
-internals), scanner (+ pre-signal liquidity floor, + compression base), evidence feeds
-(delivery/bulk deals), session calendar + health gate, corporate-action adj factors,
-sizing/limits, journal, tax ledger (FIFO + CGT), book XIRR from the fills ledger,
-risk-balanced weights (inverse-vol + HRP w/ fallback), weekly risk report, Fyers read-only
+internals), scanner (+ pre-signal liquidity floor, + compression base, + results-proximity
+notes), evidence feeds (delivery/bulk deals), announcement triage (holdings-only RED/AMBER),
+results calendar + entry size gate, session calendar + health gate, corporate-action adj
+factors, sizing/limits, journal, tax ledger (FIFO + CGT + statutory loss set-off with
+8-year carry-forward), book XIRR from the fills ledger, risk-balanced weights (inverse-vol
++ HRP w/ fallback), weekly risk report, Sunday review generator, Fyers read-only
 reconciliation, Telegram briefings, ETL+Docker, AI router (+ grounding rules, contract
 evals, falsifier field), freshness CI.
 Phases 1–3 of the plan are code-complete; the live-data half (Nifty-500 backfill, bhavcopy
 contract test, 10y walk-forward runs) is gated on docs/HOME-VALIDATION.md — this network
 blocks NSE/Yahoo. Phase 4 (paper loop, 6–8 weeks) starts from that same checklist.
-Next: announcement triage on holdings, Sunday review generator, loss set-off/carry-forward.
+Next: the laptop session (HOME-VALIDATION §1–§4), then the Phase-4 clock; deferred backlog:
+Telegram command interface, screener.in fundamentals (where the endpoint is verifiable),
+dashboard UI.
