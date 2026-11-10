@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Lint (compile check; ruff joins in Phase 1)
+        run: python -m compileall -q src
+      - name: Test
+        run: python -m pytest
+      - name: Dependency audit
+        run: |
+          python -m pip install pip-audit
+          pip-audit -r pyproject.toml --desc on || true   # advisory until deps pinned

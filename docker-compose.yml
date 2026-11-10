@@ -1,0 +1,28 @@
+services:
+  etl-loop:
+    build: .
+    container_name: indtrader-etl
+    restart: unless-stopped
+    env_file:
+      - .env            # AI keys etc. live here (git-ignored)
+    volumes:
+      - ./data:/home/appuser/data   # candles sqlite + plan journal persist HERE
+    command: ["python", "-m", "indtrader.scheduler.run_daily"]
+
+  etl-once:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./data:/home/appuser/data
+    command: ["python", "-c", "from indtrader.scheduler.run_daily import run_once; run_once()"]
+    profiles: ["tools"]   # run with: docker compose run --rm etl-once
+
+  cli:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./data:/home/appuser/data
+    entrypoint: ["python", "-m", "indtrader.cli"]
+    profiles: ["tools"]   # run with: docker compose run --rm cli backtest RELIANCE --strategy trend_sma200 --costs

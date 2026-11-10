@@ -1,0 +1,15 @@
+# Reproducible pins (verified on Windows 3.12; also what Docker installs).
+# pandas is pinned <3 deliberately: 3.x wheels ship unsigned .pyd files, which
+# Smart App Control on Windows blocks. See README "Environment notes".
+pandas==2.2.3
+numpy==2.5.4
+pydantic==2.14.3
+pydantic-settings==2.16.2
+httpx==0.28.1
+python-dotenv>=1.0
+yfinance==1.8.0
+pytest==9.2.0
+
+# Optional NSE primary data provider (GPL, kept an arm's-length dependency;
+# works on normal/home networks only):
+NseIndiaApi>=5

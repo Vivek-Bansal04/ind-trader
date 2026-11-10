@@ -1,0 +1,12 @@
+RELIANCE	Consumer Fuel
+TCS	IT
+HDFCBANK	Banking
+INFY	IT
+ICICIBANK	Banking
+SBIN	Banking
+ITC	FMCG
+LT	Capital Goods
+BHARTIARTL	Telecom
+MARUTI	Auto
+TITAN	Consumer Durables
+SUNPHARMA	Pharma

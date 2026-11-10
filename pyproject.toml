@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "indtrader"
+version = "0.1.0"
+description = "Personal non-intraday trading & investing platform for Indian equities (NSE/BSE). Daily/weekly only: signals on closed bars, executed next morning, CNC delivery."
+requires-python = ">=3.12"
+dependencies = [
+    "pandas>=2.2,<3",  # 3.x wheels ship unsigned .pyd files — blocked by Smart App Control
+    "numpy>=1.26",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    "yfinance>=0.2.40",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+# NSE as primary data source (GPL library kept as an arm's-length dependency):
+nse = ["NseIndiaApi>=5"]
+
+[project.scripts]
+indtrader = "indtrader.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

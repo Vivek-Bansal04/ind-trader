@@ -1,0 +1,14 @@
+Personal-use license.
+
+Copyright (c) 2026 Vivek Bansal. All rights reserved.
+
+This software is for the personal, private use of the copyright holder.
+No redistribution or commercial use is granted while this notice stands.
+
+Third-party attributions retained where applicable:
+- Conceptual patterns adapted from MIT-licensed projects (india-trade-cli,
+  stock-analyzer-style provider routing) — no code copied from them.
+- Ideas and definitions from published research (see docs/ARCHITECTURE.md),
+  which are not subject to copyright.
+
+If this project is ever open-sourced, replace this file with MIT or Apache-2.0.
