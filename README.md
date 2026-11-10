@@ -19,7 +19,7 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `scan` | Universe shortlist: one evidence row per symbol (trend, RRG quadrant, 6m momentum, delivery %, bulk deals, 20d turnover, compression, vol), ranked; illiquid names (<₹2Cr/day before the signal) dropped; shortlist journaled to `plans.sqlite` |
 | `fetch-feeds` | Nightly evidence refresh: delivery-% bhavcopy + bulk deals (NSE; keeps last-known when unreachable) |
 | `notify` | Evening briefing (regime + shortlist): sends to Telegram when configured, prints otherwise |
-| `bot` | Telegram command interface (long-poll, no public webhook): /status /book /scan /events /ann /fill /pause — chat-id-pinned, and the command registry can't contain order verbs (test-enforced) |
+| `bot` | Telegram command interface (long-poll, no public webhook): /status /book /scan /events /ann /plan /plans /fill /pause — chat-id-pinned, and the command registry can't contain order verbs (test-enforced) |
 | `pause` / `resume` | Quiet-switch for the daily outbound loop (flag file in DATA_DIR, survives restarts) |
 | `reconcile` | Journal vs broker holdings (Fyers read-only token): reports mismatches, never acts on them |
 | `fill SYM SIDE QTY PX --costs N` | Record an actual fill into the tax ledger |

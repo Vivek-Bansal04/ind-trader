@@ -85,6 +85,29 @@ def test_fill_records_and_validates(env):
     assert note == "via telegram bot"
 
 
+def test_plan_command_writes_and_validates(env):
+    assert "usage" in C.run_command("/plan TATA 10 200 180", env)
+    assert "rationale is mandatory" in C.run_command("/plan TATA 10 200 180 240", env)
+    assert "stop < entry < target" in C.run_command("/plan TATA 10 200 250 240 good reason here", env)
+    assert "numbers" in C.run_command("/plan TATA ten 200 180 240 good reason here", env)
+    out = C.run_command("/plan tata 10 200 180 240 breakout above 20d high", env)
+    assert "plan #1" in out and "TATA" in out
+
+    from indtrader.execution.planlog import PlanLog
+
+    log = PlanLog()
+    row = log.con.execute("SELECT symbol, action, setup, status FROM plans").fetchone()
+    log.close()
+    assert row == ("TATA", "BUY", "manual", "open")      # journal write, nothing more
+
+
+def test_plans_command_lists_open(env):
+    assert "no open plans" in C.run_command("/plans", env)
+    C.run_command("/plan TATA 10 200 180 240 breakout above 20d high", env)
+    out = C.run_command("/plans", env)
+    assert "1 open plan" in out and "#1 TATA BUY" in out and "240" in out
+
+
 def test_pause_resume_roundtrip_and_notify_gate(env):
     from indtrader.alerts.pause import is_paused
 
