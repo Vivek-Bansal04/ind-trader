@@ -21,12 +21,15 @@ from indtrader.scheduler.etl import fetch_universe, build_providers
 from indtrader.ta import atr, rsi, sma
 
 
-def _load_or_fetch(store: BarStore, symbol: str) -> pd.DataFrame:
-    df = store.load(symbol)
+def _load_or_fetch(store: BarStore, symbol: str, adjusted: bool = False) -> pd.DataFrame:
+    df = store.load(symbol, adjusted=adjusted)
     if df.empty:
         print(f"[cli] {symbol} not in store — fetching from provider...")
         fetch_universe([symbol], store=store, providers=build_providers(get_settings()))
-        df = store.load(symbol)
+        df = store.load(symbol, adjusted=adjusted)
+    if adjusted and store.adj_factors(symbol).empty:
+        print(f"[cli] {symbol}: no adjustment factors stored — backtest runs on RAW prices "
+              "(run fetch-adj on a normal network for split/dividend-correct series)")
     return df
 
 
@@ -47,7 +50,7 @@ def cmd_backtest(args) -> int:
     from indtrader.backtest.engine import Backtester
     from indtrader.backtest.strategies import REGISTRY
 
-    df = _load_or_fetch(BarStore(), args.symbol)
+    df = _load_or_fetch(BarStore(), args.symbol, adjusted=getattr(args, "adjusted", False))
     if df.empty:
         print("no data", file=sys.stderr)
         return 1
@@ -155,6 +158,57 @@ def cmd_fetch_feeds(args) -> int:
     res = feeds.fetch_feeds(lookback_days=args.days)
     print(res)
     return 0 if res["status"] == "ok" else 1
+
+
+def cmd_fetch_adj(args) -> int:
+    from indtrader.scheduler.etl import fetch_adj_factors
+
+    syms = args.symbols or load_universe(args.file)
+    res = fetch_adj_factors(syms, start=args.start)
+    zero = [s for s, n in res.items() if n == 0]
+    print(f"adj factors stored for {len(res) - len(zero)}/{len(res)} symbols")
+    if zero:
+        print("no factor data (adjusted reads stay RAW for these):", ", ".join(zero[:20]))
+    return 0
+
+
+def cmd_health(args) -> int:
+    """Data-health strip: rows, span, missing sessions vs the index calendar, staleness,
+    adjustment coverage. Exits 1 when any symbol crosses the thresholds — a missing
+    candle can fake a trend, so this is a gate, not a report."""
+    from indtrader.research.calendar import index_sessions, missing_sessions, staleness_days
+
+    store = BarStore()
+    try:
+        idx = store.load(args.index)
+        if idx.empty:
+            print(f"health needs '{args.index}' bars in store first (run fetch-universe on a normal network)",
+                  file=sys.stderr)
+            return 1
+        sessions = index_sessions(idx)
+        rows, bad = [], 0
+        for sym in sorted(set(load_universe(args.file))):
+            df = store.load(sym, validate=False)
+            if df.empty:
+                rows.append({"symbol": sym, "rows": 0, "first": None, "last": None,
+                             "missing_sessions": None, "stale_sessions_ago": None, "adj_coverage": None})
+                bad += 1
+                continue
+            miss = missing_sessions(df.index, sessions)
+            stale = staleness_days(df.index, sessions)
+            f = store.adj_factors(sym)
+            cov = round(float(f.reindex(df.index, method="ffill").ffill().notna().mean()), 3) if len(f) else 0.0
+            rows.append({"symbol": sym, "rows": len(df), "first": str(df.index[0].date()),
+                         "last": str(df.index[-1].date()), "missing_sessions": int(len(miss)),
+                         "stale_sessions_ago": stale, "adj_coverage": cov})
+            if len(miss) > args.max_missing or (stale if stale is not None else 10**9) > args.max_stale:
+                bad += 1
+        print(pd.DataFrame(rows).to_string(index=False))
+        print(f"[health] {bad} problem symbol(s) of {len(rows)} "
+              f"(thresholds: missing>{args.max_missing} sessions, stale>{args.max_stale})")
+        return 1 if bad else 0
+    finally:
+        store.close()
 
 
 def cmd_universe(args) -> int:
@@ -315,6 +369,8 @@ def main(argv=None) -> int:
     s.add_argument("symbol")
     s.add_argument("--strategy", default="trend_sma200")
     s.add_argument("--costs", action="store_true", help="apply Indian delivery costs")
+    s.add_argument("--adjusted", action="store_true",
+                   help="use stored corporate-action factors (warns + falls back to RAW if none stored)")
     s.set_defaults(fn=cmd_backtest)
     s = sub.add_parser("rrg")
     s.add_argument("symbols", nargs="+"); s.add_argument("--bench", default="NIFTY"); s.set_defaults(fn=cmd_rrg)
@@ -326,6 +382,17 @@ def main(argv=None) -> int:
     s.add_argument("--no-journal", action="store_true", help="don't write the shortlist to the signal journal")
     s.set_defaults(fn=cmd_scan)
     s = sub.add_parser("fetch-feeds"); s.add_argument("--days", type=int, default=7); s.set_defaults(fn=cmd_fetch_feeds)
+    s = sub.add_parser("fetch-adj", help="store corporate-action factors (yfinance Adj Close / Close)")
+    s.add_argument("symbols", nargs="*")
+    s.add_argument("--file", default=None)
+    s.add_argument("--start", default="2015-01-01")
+    s.set_defaults(fn=cmd_fetch_adj)
+    s = sub.add_parser("health", help="data-health gate: rows/gaps/staleness/adj-coverage vs index calendar")
+    s.add_argument("--file", default=None)
+    s.add_argument("--index", default="NIFTY")
+    s.add_argument("--max-missing", dest="max_missing", type=int, default=2)
+    s.add_argument("--max-stale", dest="max_stale", type=int, default=3)
+    s.set_defaults(fn=cmd_health)
     s = sub.add_parser("notify"); s.set_defaults(fn=cmd_notify)
     s = sub.add_parser("reconcile")
     s.add_argument("--report-only", action="store_true", help="print only, never send Telegram")

@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS candles(
 CREATE TABLE IF NOT EXISTS ingest_runs(
     symbol TEXT, tf TEXT, run_at TEXT, rows INT, source TEXT
 );
+CREATE TABLE IF NOT EXISTS adj_factors(
+    symbol TEXT, d TEXT, factor REAL, source TEXT,
+    PRIMARY KEY (symbol, d)
+);
 """
 
 
@@ -59,7 +63,7 @@ class BarStore:
         return len(rows)
 
     def load(self, symbol: str, tf: str = "daily", start: str | None = None, end: str | None = None,
-             validate: bool = True) -> pd.DataFrame:
+             validate: bool = True, adjusted: bool = False) -> pd.DataFrame:
         q = "SELECT d, open, high, low, close, volume FROM candles WHERE symbol=? AND tf=?"
         args: list = [symbol.upper(), tf]
         if start:
@@ -81,6 +85,16 @@ class BarStore:
             if bad:
                 print(f"[data-quality] {symbol}: dropped {bad} invalid rows on read")
                 df = df[mask]
+        if adjusted:
+            f = self.adj_factors(symbol)
+            if f.empty:
+                print(f"[data-quality] {symbol}: no adjustment factors stored — returning RAW prices "
+                      "instead of pretending the series is adjusted")
+            else:
+                # normalised so the most recent price stays the actual traded price
+                scale = (f.reindex(df.index, method="ffill").ffill() / f.iloc[-1]).to_numpy()
+                for col in ("open", "high", "low", "close"):
+                    df[col] = df[col].to_numpy() * scale
         return df
 
     def missing_days(self, symbol: str, tf: str = "daily", start: str = "2015-01-01") -> int:
@@ -96,6 +110,22 @@ class BarStore:
     def last_date(self, symbol: str, tf: str = "daily"):
         r = self.con.execute("SELECT max(d) FROM candles WHERE symbol=? AND tf=?", [symbol.upper(), tf]).fetchone()
         return pd.Timestamp(r[0]).date() if r and r[0] else None
+
+    # --- corporate-action adjustment factors (raw prices stay untouched) ---
+    def upsert_adj_factors(self, symbol: str, factors: pd.Series, source: str) -> int:
+        """factors indexed by date: the ratio split/dividend-adjusted close / raw close."""
+        rows = [(symbol.upper(), pd.Timestamp(ts).date().isoformat(), float(v), source)
+                for ts, v in factors.dropna().items()]
+        self.con.executemany("INSERT OR REPLACE INTO adj_factors VALUES (?,?,?,?)", rows)
+        self.con.commit()
+        return len(rows)
+
+    def adj_factors(self, symbol: str) -> pd.Series:
+        r = self.con.execute(
+            "SELECT d, factor FROM adj_factors WHERE symbol=? ORDER BY d", [symbol.upper()]).fetchall()
+        if not r:
+            return pd.Series(dtype="float64")
+        return pd.Series([v for _, v in r], index=pd.to_datetime([d for d, _ in r]), name="factor")
 
     def close(self):
         self.con.close()

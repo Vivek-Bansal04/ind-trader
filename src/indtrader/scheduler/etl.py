@@ -64,3 +64,28 @@ def fetch_universe(symbols: list[str], store: BarStore | None = None, providers:
 def run_etl(universe_file=None, store: BarStore | None = None) -> dict[str, int]:
     symbols = load_universe(universe_file)
     return fetch_universe(symbols, store=store)
+
+
+def fetch_adj_factors(symbols: list[str], store: BarStore | None = None,
+                      start: str = "2015-01-01", pause_s: float = 0.3) -> dict[str, int]:
+    """Corporate-action factors (Adj Close/Close) from yfinance, stored next to raw
+    candles — raw stays the source of truth; factors are the derived layer. Symbols
+    whose factor feed is empty report 0, loudly — never a silent factor of 1.0."""
+    store = store or BarStore()
+    prov = YFinanceProvider()
+    end = (date.today() + timedelta(days=1)).isoformat()
+    out: dict[str, int] = {}
+    for sym in symbols:
+        try:
+            f = prov.daily_adj_factors(sym, start, end)
+        except Exception as e:
+            print(f"[etl-adj] {sym}: factor fetch failed: {e}")
+            out[sym] = 0
+            continue
+        if f.empty:
+            print(f"[etl-adj] {sym}: no factor data from yfinance — adjusted reads stay RAW for it")
+        else:
+            store.upsert_adj_factors(sym, f, prov.name)
+        out[sym] = int(f.size)
+        time.sleep(pause_s)
+    return out
