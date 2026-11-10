@@ -45,6 +45,11 @@ def clean_daily(df: pd.DataFrame, symbol: str, max_gap_warn: int = 3) -> pd.Data
     return out
 
 
+_INDEX_MAP = {"NIFTY": "^NSEI"}
+
+
 def suffix_nse(symbol: str) -> str:
     s = symbol.upper().strip()
+    if s in _INDEX_MAP:
+        return _INDEX_MAP[s]
     return s if "." in s else f"{s}.NS"
