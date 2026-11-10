@@ -58,16 +58,33 @@ Upserts are idempotent, so a missed night self-heals the next evening.
 ## Manual daily workflow (what it's actually for)
 
 1. 16:05 — ETL updates candles automatically, then evidence feeds (delivery % + bulk
-   deals) best-effort (Docker loop or Windows Task Scheduler).
+   deals) best-effort (Docker loop or Windows Task Scheduler). `cli backup` in the same
+   schedule (online sqlite copies + integrity check, keeps 14).
 2. Evening — `cli regime` → one of ON/NEUTRAL/OFF sets your max exposure.
-3. `cli scan` → ranked shortlist with evidence (trend/RRG/momentum/delivery/deals per symbol).
-4. For each pick: `cli backtest <sym> --strategy <s> --costs` sanity + written plan
-   (`planlog.add_plan`) with entry/stop/target/rationale.
+3. `cli scan` → ranked shortlist with evidence (trend/RRG/momentum/delivery/deals per
+   symbol). Refuses (exit 1) if the index's last bar is >5 business days old — dead-man;
+   fix the ETL, don't override.
+4. For each pick: `cli compare <sym> --costs` to see all strategies side by side, then
+   `cli plan SYM BUY --qty N --entry E --stop S --target T --reason "..." [--setup X]`
+   — the rationale is mandatory and stop<entry<target is enforced at the door.
 5. You place the CNC order manually at next morning's open (VRO or broker GTT/limit).
    The system never touches your broker.
-6. After executing: `cli fill SYM BUY/SELL qty px --costs ...` records the actual fill
-   (tax ledger); `cli reconcile` compares journal vs Fyers holdings (read-only) and
+6. After executing: `cli fill SYM BUY/SELL qty px --costs ... --plan ID` records the
+   actual fill AND closes the plan (the ledger note keeps the `plan#N` trace);
+   `cli reconcile` compares journal vs Fyers holdings (read-only) and
    flags anything unexplained. `cli tax` prints FY-wise realized gains + CGT estimate.
+
+Monthly (plan §D discipline):
+
+- `cli attribution` — realized P&L by setup × index-trend-at-entry; anything showing as
+  `unplanned` is a fill without a written plan (visible, not hidden).
+- `cli decay <sym> --strategy <s>` — the paper book vs the backtest's own bootstrap band;
+  a REVIEW flag means put the strategy under human review, not that a bot trades less.
+- `cli review` (Sundays) + `cli riskreport` close the loop; `cli dashboard` shows it all
+  read-only on http://127.0.0.1:8765.
+
+Seasonal (pre-March): `cli harvest` lists tax-loss candidates and free basis resets from
+your open FIFO lots — computation only, the selling stays yours.
 
 ## Office laptop caveat (this machine)
 
