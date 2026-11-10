@@ -83,3 +83,30 @@ def test_flip_note_names_thresholds_and_counts():
     assert "60%" in off and "40 more of 100" in off and "24,000" in off
     neut = flip_note(Regime("NEUTRAL", 0.6, None, None))
     assert "breadth unknown" in neut  # unknown stated as unknown, not assumed fine
+
+
+def _bars(c):
+    return pd.DataFrame({"open": c, "high": c * 1.001, "low": c * 0.999, "close": c,
+                         "volume": 2e6}, index=c.index)
+
+
+def test_compressed_base_annotates_never_boosts():
+    c = mk(300, 0.002, seed=2)
+    base = float(c.iloc[-21])
+    tail = pd.Series(base * (1.0 + 0.0002 * np.sin(np.arange(20))), index=c.index[-20:])
+    sq = pd.concat([c.iloc[:-20], tail])
+    out = scan({"W": sq}, bench=mk(300, 0.0003, seed=9), volumes={"W": _flat_volume()},
+               bars={"W": _bars(sq)})
+    row = out.iloc[0]
+    assert row["base_quality"] == "tight" and "compressed base" in row["note"]
+    assert bool(row["tradable"])
+    plain = scan({"W": sq}, bench=mk(300, 0.0003, seed=9), volumes={"W": _flat_volume()})
+    assert plain.iloc[0]["score"] == row["score"]  # annotation, never a boost
+    assert pd.isna(plain.iloc[0]["base_quality"])  # no bars passed -> unknown, not "wide"
+
+
+def test_wide_name_shows_wide_not_tight():
+    c = mk(300, 0.002, seed=2)
+    out = scan({"W": c}, bench=mk(300, 0.0003, seed=9), volumes={"W": _flat_volume()},
+               bars={"W": _bars(c)})
+    assert out.iloc[0]["base_quality"] == "wide"

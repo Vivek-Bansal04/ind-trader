@@ -90,9 +90,9 @@ def cmd_regime(args) -> int:
     if not closes or idx.empty:
         print("insufficient data", file=sys.stderr)
         return 1
-    r = regime_from_data(closes, idx["close"])
+    r = regime_from_data(closes, idx["close"], idx["volume"])
     print(f"regime={r.label} exposure_scale={r.exposure_scale} breadth={r.breadth} index_trend_up={r.index_trend_up}")
-    print(flip_note(r))
+    print(flip_note(r, r.ftd))
     return 0
 
 
@@ -102,7 +102,7 @@ def cmd_scan(args) -> int:
     from indtrader.research.scanner import scan
 
     store = BarStore()
-    closes, volumes, missing, extras = {}, {}, [], {}
+    closes, volumes, bars, missing, extras = {}, {}, {}, [], {}
     for sym in load_universe(args.file):
         df = _load_or_fetch(store, sym)
         if df.empty:
@@ -110,6 +110,7 @@ def cmd_scan(args) -> int:
             continue
         closes[sym] = df["close"]
         volumes[sym] = df["volume"]
+        bars[sym] = df
         extra = {
             "deliv_per": feeds.latest_delivery_per(store, sym),
             "deliv_avg": feeds.avg_delivery_per(store, sym),
@@ -123,12 +124,12 @@ def cmd_scan(args) -> int:
         if missing:
             print("missing:", ", ".join(missing), file=sys.stderr)
         return 1
-    regime = regime_from_data(closes, idx["close"])
+    regime = regime_from_data(closes, idx["close"], idx["volume"])
     table = scan(closes, bench=idx["close"], regime=regime, top=args.top, extras=extras,
-                 volumes=volumes)
+                 volumes=volumes, bars=bars)
     print(f"regime={regime.label} exposure_scale={regime.exposure_scale} "
           f"breadth={None if regime.breadth is None else round(regime.breadth, 2)}")
-    print(flip_note(regime))
+    print(flip_note(regime, regime.ftd))
     print(table.to_string(index=False))
     if missing:
         print(f"[scan] no data for: {', '.join(missing)}")
@@ -138,7 +139,7 @@ def cmd_scan(args) -> int:
         log = PlanLog()
         picks = table[table["tradable"] == True].head(args.top)  # noqa: E712
         cols = [c for c in ("symbol", "score", "quadrant", "mom_6m", "deliv_per", "net_bulk",
-                            "turnover_20d", "note") if c in table.columns]
+                            "turnover_20d", "base_quality", "note") if c in table.columns]
         log.record_signal(
             "UNIVERSE", "scan",
             {"regime": regime.label, "exposure_scale": regime.exposure_scale,

@@ -34,30 +34,33 @@ class Regime:
     index_trend_up: bool | None
     index_sma200: float | None = None  # benchmark's own gate level, for flip_note
     universe_n: int | None = None  # how many names actually counted toward breadth
+    ftd: dict | None = None  # follow_through() info line; never affects exposure_scale
 
 
 def classify(breadth: float | None, index_above_200dma: bool | None,
-             index_sma200: float | None = None, universe_n: int | None = None) -> Regime:
+             index_sma200: float | None = None, universe_n: int | None = None,
+             ftd: dict | None = None) -> Regime:
     if breadth is None or index_above_200dma is None:
-        return Regime("NEUTRAL", 0.6, breadth, index_above_200dma, index_sma200, universe_n)
+        return Regime("NEUTRAL", 0.6, breadth, index_above_200dma, index_sma200, universe_n, ftd)
     if breadth >= 0.60 and index_above_200dma:
-        return Regime("ON", 1.0, breadth, index_above_200dma, index_sma200, universe_n)
+        return Regime("ON", 1.0, breadth, index_above_200dma, index_sma200, universe_n, ftd)
     if breadth <= 0.35 or not index_above_200dma:
-        return Regime("OFF", 0.30, breadth, index_above_200dma, index_sma200, universe_n)
-    return Regime("NEUTRAL", 0.60, breadth, index_above_200dma, index_sma200, universe_n)
+        return Regime("OFF", 0.30, breadth, index_above_200dma, index_sma200, universe_n, ftd)
+    return Regime("NEUTRAL", 0.60, breadth, index_above_200dma, index_sma200, universe_n, ftd)
 
 
-def regime_from_data(close_map: dict[str, pd.Series], index_closes: pd.Series) -> Regime:
+def regime_from_data(close_map: dict[str, pd.Series], index_closes: pd.Series,
+                     index_volume: pd.Series | None = None) -> Regime:
     breadth = fraction_above_200dma(close_map)
     n = sum(1 for closes in close_map.values()
             if sma(closes, 200).notna().sum() and closes.notna().sum())
     s = sma(index_closes, 200).dropna()
     idx_up = bool(index_closes.dropna().iloc[-1] > s.iloc[-1]) if len(s) else None
     return classify(breadth, idx_up, index_sma200=(float(s.iloc[-1]) if len(s) else None),
-                    universe_n=(n or None))
+                    universe_n=(n or None), ftd=follow_through(index_closes, index_volume))
 
 
-def flip_note(regime: Regime | None) -> str:
+def flip_note(regime: Regime | None, ftd: dict | None = None) -> str:
     """Plain sentence naming the exact levels that would change the label — the anti-
     vagueness rule from the claude-skills audit. Shows current breadth next to the
     threshold so the human can see how far away a flip actually is. 'unknown' is
@@ -93,4 +96,80 @@ def flip_note(regime: Regime | None) -> str:
             missing.append("index not above its 200-DMA" + lvl)
         parts.append("ON needs " + " and ".join(missing) if missing
                      else "ON needs breadth >=60% and index above 200-DMA")
+    if ftd is not None:
+        th = f"{ftd['threshold_pct']:.2f}%"
+        if ftd["ftd_date"] is not None and ftd["days_since"] <= FTD_WATCH_SESSIONS:
+            parts.append(f"FTD {ftd['days_since']} sessions ago (day {ftd['ftd_day_no']} "
+                         f"by {th}+, on volume)")
+        elif ftd["state"] == "rally_attempt":
+            parts.append(f"rally attempt day {ftd['attempt_day_no']}, FTD needs a "
+                         f"{th}+ day from day {FTD_MIN_DAY}")
+        elif ftd["state"] == "correction":
+            parts.append(f"correction, awaiting FTD (needs {th}+ from day {FTD_MIN_DAY})")
     return "; ".join(parts)
+
+
+# --- follow-through (FTD): informational market-internals, never touches exposure ---
+# State machine from the claude-skills market-regime skill (MIT), simplified to closes
+# (closes double as the undercut proxy) and one key fix their own audit flagged: the
+# advance threshold is σ-scaled — clamp(1.5 × σ(lookback), 1%, 2%) — because a fixed
+# 1.5% almost never fires on NIFTY.
+FTD_CORRECTION_PCT = 0.05
+FTD_MIN_DAY = 4
+FTD_WATCH_SESSIONS = 25
+FTD_LOOKBACK = 300
+
+
+def follow_through(closes: pd.Series, volume: pd.Series | None = None,
+                   lookback: int = FTD_LOOKBACK) -> dict | None:
+    """Scan the last `lookback` index sessions once. Returns None on < 60 bars —
+    absent data stays absent, it never defaults to a friendly state."""
+    c = closes.dropna().tail(lookback)
+    if len(c) < 60:
+        return None
+    sigma = float(c.pct_change().std())
+    threshold = min(0.02, max(0.01, 1.5 * sigma))
+    cl = c.to_numpy(dtype=float)
+    v = volume.dropna().reindex(c.index).to_numpy(dtype=float) if volume is not None else None
+    has_vol = v is not None and not bool(pd.isna(v).any())
+    state, peak, low_i, day1_i, ftd_i, ftd_day = "uptrend", 0, 0, None, None, None
+    for i in range(1, len(cl)):
+        chg = cl[i] / cl[i - 1] - 1.0
+        if state == "uptrend":
+            peak = i if cl[i] > cl[peak] else peak
+            if cl[i] <= cl[peak] * (1 - FTD_CORRECTION_PCT):
+                state, low_i = "correction", i
+            continue
+        if cl[i] > cl[peak]:  # V-shaped recovery / continuation without needing a new FTD
+            state, peak = "uptrend", i
+            continue
+        if state == "follow_through":
+            if cl[i] < cl[low_i]:  # closed below the rally low — the FTD failed
+                state, low_i = "correction", i
+            elif i - ftd_i > FTD_WATCH_SESSIONS:
+                state = "uptrend"
+            continue
+        if state == "correction":
+            low_i = i if cl[i] < cl[low_i] else low_i
+            if chg > 0:
+                state, day1_i = "rally_attempt", i
+            continue
+        # rally_attempt
+        if cl[i] < cl[low_i]:  # undercut kills the attempt; new correction, day 1 resets
+            state, low_i = "correction", i
+            continue
+        day = i - day1_i + 1
+        vol_up = has_vol and not pd.isna(v[i]) and not pd.isna(v[i - 1]) and v[i] > v[i - 1]
+        if day >= FTD_MIN_DAY and chg >= threshold and vol_up:
+            state, ftd_i, ftd_day, peak = "follow_through", i, day, i
+    dates = c.index
+    last = len(cl) - 1
+    return {
+        "state": state,
+        "ftd_date": str(dates[ftd_i].date()) if ftd_i is not None else None,
+        "days_since": (last - ftd_i) if ftd_i is not None else None,
+        "ftd_day_no": ftd_day,
+        "attempt_day_no": (last - day1_i + 1) if (state == "rally_attempt" and day1_i is not None) else None,
+        "threshold_pct": round(100 * threshold, 2),
+        "volume_checked": has_vol,
+    }

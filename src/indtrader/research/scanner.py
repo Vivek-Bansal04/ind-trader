@@ -18,9 +18,42 @@ import pandas as pd
 
 from indtrader.research.regime import Regime
 from indtrader.research.rrg import quadrant, rs_momentum, rs_ratio
-from indtrader.ta import annualized_vol, rsi, sma
+from indtrader.ta import annualized_vol, atr, ema, rsi, sma
 
 QUADRANT_SCORE = {"Improving": 2.0, "Leading": 1.5, "Weakening": 0.0, "Lagging": -1.0, "NA": 0.0}
+
+# Compression ("base" quality): 20-session close range divided by ATR(14) — scale-free,
+# works the same on a ₹50 and a ₹5,000 name (concept from the nse-stock-analysis audit).
+# Pure evidence: a tight base ANNOTATES, never boosts — it can resolve either way, and
+# guessing a directional weight for it is the fudge we reject.
+COMP_RANGE_ATR = 0.90
+COMP_EMA_DRIFT = 0.03
+COMP_LOOKBACK = 20
+
+
+def compression_ratio(closes: pd.Series, bars: pd.DataFrame | None) -> float | None:
+    c = closes.dropna()
+    if bars is None or len(c) < COMP_LOOKBACK:
+        return None
+    b = bars.tail(COMP_LOOKBACK)
+    a = float(atr(b, 14).iloc[-1])
+    if not a or pd.isna(a):
+        return None
+    cw = c.tail(COMP_LOOKBACK)
+    return (float(cw.max()) - float(cw.min())) / a
+
+
+def is_compressing(closes: pd.Series, bars: pd.DataFrame | None) -> bool:
+    """Tight range AND price parked near the 21-EMA: a base, not a flagging downtrend.
+    (Weekly-band idea from the Enigma_24 audit, clean-room, applied daily without ever
+    being allowed to gate anything.)"""
+    ratio = compression_ratio(closes, bars)
+    if ratio is None or ratio > COMP_RANGE_ATR:
+        return False
+    c = closes.dropna()
+    e = float(ema(c, 21).iloc[-1])
+    return bool(e and abs(float(c.iloc[-1]) / e - 1.0) <= COMP_EMA_DRIFT)
+
 
 # ₹/day average turnover over the 20 sessions BEFORE the signal day (close*volume proxy).
 # A swing position must be enterable and exitable; one spike-day of volume cannot launder
@@ -41,11 +74,13 @@ def liquidity_ok(closes: pd.Series, volume: pd.Series | None) -> tuple[bool, flo
 
 
 def evidence_row(symbol: str, closes: pd.Series, bench: pd.Series | None,
-                 extra: dict | None = None, volume: pd.Series | None = None) -> dict:
+                 extra: dict | None = None, volume: pd.Series | None = None,
+                 bars: pd.DataFrame | None = None) -> dict:
     """One symbol's full evidence record. NaN-tolerant: short history just scores 0.
 
     `extra` carries store-derived feeds (delivery %, net bulk value) — attached and
     scored, but only when actually ingested (None = unknown, which scores nothing).
+    `bars` (full OHLCV frame) enables the compression column; without it, unknown.
     """
     c = closes.dropna()
     row: dict = {"symbol": symbol}
@@ -91,13 +126,19 @@ def evidence_row(symbol: str, closes: pd.Series, bench: pd.Series | None,
     if not liq_ok:
         row["tradable"] = False
         row["note"] = (row["note"] + "; " if row["note"] else "") + "illiquid (<2Cr/day)"
+    ratio = compression_ratio(c, bars)
+    row["base_quality"] = ("tight" if (ratio is not None and is_compressing(c, bars))
+                           else "wide" if ratio is not None else None)
+    if row["base_quality"] == "tight" and above:
+        row["note"] = (row["note"] + "; " if row["note"] else "") + "compressed base"
     return row
 
 
 def scan(closes: dict[str, pd.Series], bench: pd.Series | None = None,
          regime: Regime | None = None, top: int = 10,
          extras: dict[str, dict] | None = None,
-         volumes: dict[str, pd.Series] | None = None) -> pd.DataFrame:
+         volumes: dict[str, pd.Series] | None = None,
+         bars: dict[str, pd.DataFrame] | None = None) -> pd.DataFrame:
     """Evidence table for the whole universe, best candidates first.
 
     extras: {symbol: {deliv_per, deliv_avg, net_bulk}} — from data.feeds readers.
@@ -105,9 +146,10 @@ def scan(closes: dict[str, pd.Series], bench: pd.Series | None = None,
     Missing feeds score/annotate nothing — unknown must never look like evidence.
     volumes: {symbol: volume series} — feeds the liquidity floor; absent = unknown,
     which never disqualifies but is shown as such (turnover_20d = None).
+    bars: {symbol: OHLCV frame} — feeds the compression column; same unknown rule.
     """
     rows = [evidence_row(sym, c, bench, extra=(extras or {}).get(sym),
-                         volume=(volumes or {}).get(sym))
+                         volume=(volumes or {}).get(sym), bars=(bars or {}).get(sym))
             for sym, c in sorted(closes.items())]
     df = pd.DataFrame(rows)
     df["score"] = 0.0
