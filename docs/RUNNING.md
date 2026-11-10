@@ -6,7 +6,7 @@ Everything persistent is in the **`data/` folder**, nothing else:
 
 | File | What it holds | Format |
 |---|---|---|
-| `data/bars.sqlite` | All daily OHLCV candles for the universe (the single source of truth), plus ingest audit trail | SQLite |
+| `data/bars.sqlite` | All daily OHLCV candles for the universe (the single source of truth), plus ingest audit trail. Also holds the `delivery_pct` and `deals` evidence tables | SQLite |
 | `data/plans.sqlite` | Signal log + order plans with mandatory rationale + status | SQLite |
 | `data/universe.sample.txt` | Example watchlist: `SYMBOL<TAB>Sector` per line | text, git-tracked |
 
@@ -57,9 +57,10 @@ Upserts are idempotent, so a missed night self-heals the next evening.
 
 ## Manual daily workflow (what it's actually for)
 
-1. 16:05 — ETL updates candles automatically (Docker loop or Windows Task Scheduler).
+1. 16:05 — ETL updates candles automatically, then evidence feeds (delivery % + bulk
+   deals) best-effort (Docker loop or Windows Task Scheduler).
 2. Evening — `cli regime` → one of ON/NEUTRAL/OFF sets your max exposure.
-3. `cli scan` → ranked shortlist with evidence (trend/RRG/momentum per symbol); `cli rrg ...` for the rotation picture.
+3. `cli scan` → ranked shortlist with evidence (trend/RRG/momentum/delivery/deals per symbol).
 4. For each pick: `cli backtest <sym> --strategy <s> --costs` sanity + written plan
    (`planlog.add_plan`) with entry/stop/target/rationale.
 5. You place the CNC order manually at next morning's open (VRO or broker GTT/limit).

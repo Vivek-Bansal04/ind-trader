@@ -96,17 +96,25 @@ def cmd_regime(args) -> int:
 
 
 def cmd_scan(args) -> int:
+    from indtrader.data import feeds
     from indtrader.research.regime import regime_from_data
     from indtrader.research.scanner import scan
 
     store = BarStore()
-    closes, missing = {}, []
+    closes, missing, extras = {}, [], {}
     for sym in load_universe(args.file):
         df = _load_or_fetch(store, sym)
         if df.empty:
             missing.append(sym)
             continue
         closes[sym] = df["close"]
+        extra = {
+            "deliv_per": feeds.latest_delivery_per(store, sym),
+            "deliv_avg": feeds.avg_delivery_per(store, sym),
+            "net_bulk": feeds.net_bulk_value(store, sym),
+        }
+        if any(v is not None for v in extra.values()):
+            extras[sym] = extra
     idx = _load_or_fetch(store, args.index)
     if not closes or idx.empty:
         print("insufficient data — run fetch-universe first (home network)", file=sys.stderr)
@@ -114,7 +122,7 @@ def cmd_scan(args) -> int:
             print("missing:", ", ".join(missing), file=sys.stderr)
         return 1
     regime = regime_from_data(closes, idx["close"])
-    table = scan(closes, bench=idx["close"], regime=regime, top=args.top)
+    table = scan(closes, bench=idx["close"], regime=regime, top=args.top, extras=extras)
     print(f"regime={regime.label} exposure_scale={regime.exposure_scale} "
           f"breadth={None if regime.breadth is None else round(regime.breadth, 2)}")
     print(table.to_string(index=False))
@@ -125,12 +133,46 @@ def cmd_scan(args) -> int:
 
         log = PlanLog()
         picks = table[table["tradable"] == True].head(args.top)  # noqa: E712
+        cols = [c for c in ("symbol", "score", "quadrant", "mom_6m", "deliv_per", "net_bulk", "note")
+                if c in table.columns]
         log.record_signal(
             "UNIVERSE", "scan",
             {"regime": regime.label, "exposure_scale": regime.exposure_scale,
-             "picks": picks[["symbol", "score", "quadrant", "mom_6m"]].to_dict("records")},
+             "picks": picks[cols].to_dict("records")},
         )
         log.close()
+    return 0
+
+
+def cmd_fetch_feeds(args) -> int:
+    from indtrader.data import feeds
+
+    res = feeds.fetch_feeds(lookback_days=args.days)
+    print(res)
+    return 0 if res["status"] == "ok" else 1
+
+
+def cmd_universe(args) -> int:
+    """Dump an index's constituents to a universe file (needs NseIndiaApi + network)."""
+    try:
+        from nse import NSE
+    except ImportError:
+        print("needs NseIndiaApi: pip install NseIndiaApi (works on a home network)", file=sys.stderr)
+        return 1
+    from indtrader.data.feeds import index_universe
+
+    import tempfile
+    from pathlib import Path
+
+    with NSE(download_folder=tempfile.mkdtemp(prefix="nseuni_")) as nse:
+        syms = index_universe(nse, index=args.index)
+    if not syms:
+        print(f"no constituents returned for '{args.index}'", file=sys.stderr)
+        return 1
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(syms) + "\n", encoding="utf-8")
+    print(f"{len(syms)} symbols for '{args.index}' -> {out}")
     return 0
 
 
@@ -183,6 +225,11 @@ def main(argv=None) -> int:
     s.add_argument("--top", type=int, default=10)
     s.add_argument("--no-journal", action="store_true", help="don't write the shortlist to the signal journal")
     s.set_defaults(fn=cmd_scan)
+    s = sub.add_parser("fetch-feeds"); s.add_argument("--days", type=int, default=7); s.set_defaults(fn=cmd_fetch_feeds)
+    s = sub.add_parser("universe")
+    s.add_argument("--index", default="nifty 50")
+    s.add_argument("--out", default="data/universe.txt")
+    s.set_defaults(fn=cmd_universe)
     s = sub.add_parser("ai"); s.add_argument("symbol"); s.set_defaults(fn=cmd_ai)
 
     args = p.parse_args(argv)

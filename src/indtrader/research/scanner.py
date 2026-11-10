@@ -23,8 +23,13 @@ from indtrader.ta import annualized_vol, rsi, sma
 QUADRANT_SCORE = {"Improving": 2.0, "Leading": 1.5, "Weakening": 0.0, "Lagging": -1.0, "NA": 0.0}
 
 
-def evidence_row(symbol: str, closes: pd.Series, bench: pd.Series | None) -> dict:
-    """One symbol's full evidence record. NaN-tolerant: short history just scores 0."""
+def evidence_row(symbol: str, closes: pd.Series, bench: pd.Series | None,
+                 extra: dict | None = None) -> dict:
+    """One symbol's full evidence record. NaN-tolerant: short history just scores 0.
+
+    `extra` carries store-derived feeds (delivery %, net bulk value) — attached and
+    scored, but only when actually ingested (None = unknown, which scores nothing).
+    """
     c = closes.dropna()
     row: dict = {"symbol": symbol}
     if len(c) < 210:  # need a 200-DMA gate to say anything at all
@@ -56,19 +61,37 @@ def evidence_row(symbol: str, closes: pd.Series, bench: pd.Series | None) -> dic
             "note": "",
         }
     )
+    if extra:
+        row["deliv_per"] = extra.get("deliv_per")
+        row["deliv_avg20"] = extra.get("deliv_avg")
+        row["net_bulk"] = extra.get("net_bulk")
+        # a breakout on thin delivery is mostly churning — flag for the human eye
+        dp, da = extra.get("deliv_per"), extra.get("deliv_avg")
+        if dp is not None and da is not None and above and dp < min(da, 40.0):
+            row["note"] = "low delivery on trend"
     return row
 
 
 def scan(closes: dict[str, pd.Series], bench: pd.Series | None = None,
-         regime: Regime | None = None, top: int = 10) -> pd.DataFrame:
-    """Evidence table for the whole universe, best candidates first."""
-    rows = [evidence_row(sym, c, bench) for sym, c in sorted(closes.items())]
+         regime: Regime | None = None, top: int = 10,
+         extras: dict[str, dict] | None = None) -> pd.DataFrame:
+    """Evidence table for the whole universe, best candidates first.
+
+    extras: {symbol: {deliv_per, deliv_avg, net_bulk}} — from data.feeds readers.
+    Only net positive bulk buying boosts (+0.5); low delivery only annotates.
+    Missing feeds score/annotate nothing — unknown must never look like evidence.
+    """
+    rows = [evidence_row(sym, c, bench, extra=(extras or {}).get(sym))
+            for sym, c in sorted(closes.items())]
     df = pd.DataFrame(rows)
     df["score"] = 0.0
     ok = df["tradable"] == True  # noqa: E712
     df.loc[ok, "score"] += df.loc[ok, "quadrant"].map(QUADRANT_SCORE).fillna(0.0)
     if ok.any():
         df.loc[ok, "score"] += df.loc[ok, "mom_6m"].rank(pct=True)
+    if extras:
+        boost = df["symbol"].map(lambda s: 0.5 if ((extras.get(s) or {}).get("net_bulk") or 0) > 0 else 0.0)
+        df.loc[ok, "score"] += boost[ok]
     if regime is not None:
         df["exposure_scale"] = regime.exposure_scale
     df = df.sort_values(["tradable", "score"], ascending=False).reset_index(drop=True)

@@ -34,6 +34,7 @@ ETL (providers) -> BarStore (sqlite, validated) -> strategies(signals on closed 
 | AI layer | stock-analyzer provider-router pattern | strict-JSON contract, per-provider graceful failure, keyless default, zero order path |
 | Data adapters | NseIndiaApi/BseIndiaApi (BennyThadikaran) design: throttle, cookie store, retry | vendored as separate adapters in Phase 1; protocol defined here already |
 | Store | mftool cache lessons + engine's JSON-cache weakness | sqlite of record, idempotent upserts, validate-on-read |
+| Evidence feeds (delivery %, bulk deals) | NSE bhavcopy/deal reports themselves (public data) via NseIndiaApi; delivery-%-as-signal is common Indian-practice lore, not paper-backed | parsers written offline against real response shapes; low delivery only annotates, net bulk buys only boost — neither can trigger a trade; unknown ≠ zero |
 | Walk-forward / plateau | standard WF validation; CPCV upgrade planned | overfit ratio + parameter-plateau gate before any strategy goes live |
 
 ## Research encoded as defaults
@@ -54,8 +55,11 @@ ETL (providers) -> BarStore (sqlite, validated) -> strategies(signals on closed 
 
 ## Known limits (honest list)
 
-- yfinance is the only live provider today (works on normal networks; blocked on the
-  corp laptop's TLS-intercepting proxy). NseIndiaApi + broker adapters are the Phase-1 work.
-- Single-symbol backtests; portfolio-level concurrent simulation comes with the scanner.
-- No fundamentals, news, PIT/bulk-deal or shareholding feeds yet (Phase 2-3, feeds exist).
+- NseIndiaApi is the primary provider when installed (`pip install .[nse]`); yfinance is
+  the zero-config fallback. Both need a normal network — blocked on the corp laptop's
+  TLS-intercepting proxy; tests run fully offline regardless.
+- Single-symbol backtests; the scanner ranks the universe but portfolio-level concurrent
+  simulation (shared cash, concurrent positions) is still pending.
+- Evidence feeds cover delivery % + bulk deals now; block deals, shareholding,
+  fundamentals and news remain Phase 2-3.
 - XIRR is implemented and tested but not yet wired to a ledger (Phase 6 investing leg).

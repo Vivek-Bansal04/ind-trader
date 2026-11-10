@@ -19,6 +19,15 @@ def run_once(universe_file: str | None = None) -> dict[str, int]:
     empty = [s for s, n in res.items() if n == 0]
     print(f"[etl-loop] {datetime.now(IST):%Y-%m-%d %H:%M} IST — stored {len(res) - len(empty)}/{len(res)}"
           + (f"; EMPTY: {', '.join(empty)}" if empty else ""))
+    # best-effort evidence feeds after candles (silent no-op without NseIndiaApi)
+    try:
+        from indtrader.data.feeds import fetch_feeds
+
+        feeds_res = fetch_feeds()
+        if feeds_res["status"] != "ok":
+            print(f"[etl-loop] feeds: {feeds_res['status']} (kept last-known)")
+    except Exception as e:
+        print(f"[etl-loop] feeds failed (non-fatal): {e}")
     return res
 
 
