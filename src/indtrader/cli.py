@@ -772,10 +772,189 @@ def cmd_fill(args) -> int:
     from indtrader.execution.planlog import PlanLog
 
     when = args.date or _date.today().isoformat()
+    note = args.note or ""
     log = PlanLog()
-    fid = log.add_fill(when, args.symbol, args.side, args.qty, args.price, args.costs, args.note)
+    if args.plan:
+        row = log.con.execute("SELECT symbol, status FROM plans WHERE id=?", [args.plan]).fetchone()
+        if row is None:
+            print(f"no plan #{args.plan} — create one first: indtrader plan SYM BUY ...",
+                  file=sys.stderr)
+            log.close()
+            return 1
+        if row[1] != "open":
+            print(f"plan #{args.plan} is '{row[1]}', not open — fills only close OPEN plans",
+                  file=sys.stderr)
+            log.close()
+            return 1
+    fid = log.add_fill(when, args.symbol, args.side, args.qty, args.price, args.costs,
+                       ((note + " ") if note else "") + (f"plan#{args.plan}" if args.plan else note))
+    if args.plan:
+        log.mark(args.plan, "executed")
     log.close()
-    print(f"ledger fill #{fid}: {args.side} {args.qty} {args.symbol.upper()} @ {args.price} on {args.date}")
+    print(f"ledger fill #{fid}: {args.side} {args.qty} {args.symbol.upper()} @ {args.price} on {when}"
+          + (f" (plan #{args.plan} -> executed)" if args.plan else ""))
+    return 0
+
+
+def cmd_plan(args) -> int:
+    """The plan-vs-actual front door: every position starts as a WRITTEN plan
+    (Phase-4 rule: signal traceable to a rationale)."""
+    from datetime import date as _date
+
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.models import OrderPlan
+
+    reason = (args.reason or "").strip()
+    if len(reason) < 10:
+        print("a written rationale is mandatory (>= 10 chars) — no reason, no plan",
+              file=sys.stderr)
+        return 1
+    if not 0 < args.stop < args.entry < args.target:
+        print(f"for a BUY need stop < entry < target (got {args.stop} / {args.entry} / {args.target})",
+              file=sys.stderr)
+        return 1
+    log = PlanLog()
+    pid = log.add_plan(OrderPlan(symbol=args.symbol, action="BUY", qty=args.qty, entry=args.entry,
+                                 stop=args.stop, target=args.target, reason=reason,
+                                 setup=args.setup or "manual"))
+    log.expire_stale(_date.today())
+    log.close()
+    print(f"plan #{pid}: BUY {args.qty} {args.symbol.upper()} entry {args.entry} "
+          f"stop {args.stop} target {args.target} [{args.setup or 'manual'}] — {reason}")
+    return 0
+
+
+def cmd_plans(args) -> int:
+    from indtrader.execution.planlog import PlanLog
+
+    log = PlanLog()
+    rows = log.con.execute(
+        "SELECT id, created, symbol, qty, entry, stop, target, setup, status, reason "
+        "FROM plans " + ("" if args.all else "WHERE status='open' ") +
+        "ORDER BY status DESC, created DESC LIMIT 40").fetchall()
+    log.close()
+    if not rows:
+        print("no open plans — draft one with: indtrader plan SYM BUY --qty N --entry E "
+              "--stop S --target T --reason \"...\"")
+        return 0
+    for r in rows:
+        print(f"#{r[0]:<4} {str(r[1])[:16]} {r[2]:<12} qty {r[3]:<6} {r[4]}/{r[5]}/{r[6]} "
+              f"[{r[7]}] {r[8]:<9} {str(r[9])[:60]}")
+    return 0
+
+
+def cmd_plan_mark(args) -> int:
+    from indtrader.execution.planlog import PlanLog
+
+    if args.status not in ("executed", "cancelled", "stale"):
+        print("status must be executed|cancelled|stale (an executed BUY normally arrives "
+              "via: fill ... --plan ID)", file=sys.stderr)
+        return 1
+    log = PlanLog()
+    row = log.con.execute("SELECT id, symbol, status FROM plans WHERE id=?", [args.id]).fetchone()
+    if row is None:
+        print(f"no plan #{args.id}", file=sys.stderr)
+        log.close()
+        return 1
+    log.mark(args.id, args.status)
+    log.close()
+    print(f"plan #{args.id} ({row[1]}): {row[2]} -> {args.status}")
+    return 0
+
+
+def cmd_attribution(args) -> int:
+    """Plan §D monthly attribution: realized P&L by SETUP x index-trend-at-entry.
+    Lot->plan link: most recent executed plan for the symbol created on/before the
+    lot's buy date; no plan = 'unplanned' (visible, not hidden)."""
+    from datetime import datetime as _dt
+
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio.actions import apply_actions, load_actions
+    from indtrader.portfolio.tax import realize
+
+    store = BarStore()
+    log = PlanLog()
+    try:
+        entries = [e for e in apply_actions(log.fills(), load_actions(log))
+                   if not e.symbol.upper().startswith("MF:")]
+        if not entries:
+            print("no fills yet")
+            return 0
+        idx = store.load(args.index)
+        closes = pd.to_datetime(idx.index).date if not idx.empty else []
+        s = idx["close"].astype(float) if not idx.empty else None
+        sma_ok = s is not None and len(s) >= 50
+        sma_vals = s.rolling(200, min_periods=50).mean() if sma_ok else None
+
+        def trend(d):
+            if not sma_ok:
+                return "?"
+            days = list(closes)
+            prior = [x for x in days if x <= d]
+            if not prior:
+                return "?"
+            i = days.index(max(prior))
+            v, c = sma_vals.iloc[i], float(s.iloc[i])
+            if pd.isna(v):
+                return "?"
+            return "up" if c > v else "down"
+
+        plans = log.con.execute(
+            "SELECT created, symbol, setup FROM plans WHERE status='executed' ORDER BY created").fetchall()
+        agg = {}
+        for m in realize(entries):
+            setup = "unplanned"
+            for created, psym, psetup in plans:
+                if psym == m.symbol and _dt.strptime(str(created)[:10], "%Y-%m-%d").date() <= m.buy_dt:
+                    setup = psetup or "manual"
+            tag = (setup, trend(m.buy_dt))
+            r = agg.setdefault(tag, {"n": 0, "wins": 0, "net": 0.0})
+            r["n"] += 1
+            r["wins"] += 1 if m.net > 0 else 0
+            r["net"] += m.net
+        if not agg:
+            print("no realized lots yet")
+            return 0
+        rows = [{"setup": k[0], "trend_at_entry": k[1], "lots": v["n"],
+                 "win_rate": round(v["wins"] / v["n"], 2), "net": round(v["net"], 0)}
+                for k, v in sorted(agg.items())]
+        print(pd.DataFrame(rows).to_string(index=False))
+        print("retro-tagged from plans+bars (trend = index vs its 200-DMA at the lot's buy "
+              "date); unplanned = fill without an executed plan.")
+        return 0
+    finally:
+        store.close()
+        log.close()
+
+
+def cmd_compare(args) -> int:
+    """Plan §D A/B compare: same symbol, window, costs — every strategy side by side."""
+    from indtrader.backtest.costs import DeliveryCosts
+    from indtrader.backtest.engine import Backtester
+    from indtrader.backtest.strategies import REGISTRY
+
+    df = _load_or_fetch(BarStore(), args.symbol, adjusted=args.adjusted)
+    if df.empty:
+        print("no data", file=sys.stderr)
+        return 1
+    names = ([s.strip() for s in args.strategies.split(",")] if args.strategies
+             else sorted(REGISTRY))
+    rows = []
+    gross = DeliveryCosts(stt_buy=0.0, stt_sell=0.0, exchange_txn=0.0, sebi=0.0,
+                          stamp_duty_buy=0.0, cgst_on_charges=0.0, slbm_buy=0.0, slippage=0.0)
+    for n in names:
+        if n not in REGISTRY:
+            print(f"unknown strategy '{n}' (have: {', '.join(sorted(REGISTRY))})", file=sys.stderr)
+            return 1
+        res = Backtester(costs=DeliveryCosts() if args.costs else gross) \
+            .run(df, REGISTRY[n](), symbol=args.symbol.upper())
+        sm = res.summary()
+        rows.append({"strategy": n, "trades": sm.get("trades"), "cagr": sm.get("cagr"),
+                     "sharpe": sm.get("sharpe"), "maxdd": sm.get("max_drawdown"),
+                     "win_rate": sm.get("win_rate"), "profit_factor": sm.get("profit_factor")})
+    bh = float(df["close"].iloc[-1] / df["close"].iloc[0] - 1)
+    print(pd.DataFrame(rows).to_string(index=False))
+    print(f"(buy&hold total {bh:+.1%} — a strategy must beat this AFTER costs to deserve capital)")
     return 0
 
 
@@ -1181,7 +1360,36 @@ def main(argv=None) -> int:
     s.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
     s.add_argument("--costs", type=float, default=0.0, help="all-in costs of this fill (STT/stamp/GST...)")
     s.add_argument("--note", default="")
+    s.add_argument("--plan", type=int, default=None,
+                   help="id of the OPEN written plan this fill executes (marks it executed)")
     s.set_defaults(fn=cmd_fill)
+    s = sub.add_parser("plan", help="write a BUY plan (mandatory reason; stop < entry < target)")
+    s.add_argument("symbol")
+    s.add_argument("action", choices=["BUY"])
+    s.add_argument("--qty", type=int, required=True)
+    s.add_argument("--entry", type=float, required=True)
+    s.add_argument("--stop", type=float, required=True)
+    s.add_argument("--target", type=float, required=True)
+    s.add_argument("--reason", default="", help="written rationale, >= 10 chars — mandatory")
+    s.add_argument("--setup", default="", help="breakout | pullback | rotation-en | manual")
+    s.set_defaults(fn=cmd_plan)
+    s = sub.add_parser("plans", help="list plans (open first; --all for everything recent)")
+    s.add_argument("--all", action="store_true")
+    s.set_defaults(fn=cmd_plans)
+    s = sub.add_parser("plan-mark", help="set a plan's status by hand (executed|cancelled|stale)")
+    s.add_argument("id", type=int)
+    s.add_argument("status")
+    s.set_defaults(fn=cmd_plan_mark)
+    s = sub.add_parser("attribution", help="realized P&L by setup x index-trend-at-entry")
+    s.add_argument("--index", default="NIFTY")
+    s.set_defaults(fn=cmd_attribution)
+    s = sub.add_parser("compare", help="A/B every strategy on one symbol, same window and costs")
+    s.add_argument("symbol")
+    s.add_argument("--strategies", default=None, help="comma list (default: all in REGISTRY)")
+    s.add_argument("--costs", action="store_true",
+                   help="apply full delivery costs + slippage (default: gross, none)")
+    s.add_argument("--adjusted", action="store_true", help="use adjusted bars")
+    s.set_defaults(fn=cmd_compare)
     s = sub.add_parser("tax", help="FIFO realized P&L + CGT estimate per financial year")
     s.add_argument("--setoff", action="store_true",
                    help="apply loss set-off order + 8-year carry-forward instead of the upper bound")
