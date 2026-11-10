@@ -18,6 +18,8 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `rrg SYM SYM ... --bench NIFTY` | Clean-room Relative Rotation Graph: quadrant + quadrant transitions |
 | `scan` | Universe shortlist: one evidence row per symbol (trend, RRG quadrant, 6m momentum, delivery %, bulk deals, vol), ranked; shortlist journaled to `plans.sqlite` |
 | `fetch-feeds` | Nightly evidence refresh: delivery-% bhavcopy + bulk deals (NSE; keeps last-known when unreachable) |
+| `notify` | Evening briefing (regime + shortlist): sends to Telegram when configured, prints otherwise |
+| `reconcile` | Journal vs broker holdings (Fyers read-only token): reports mismatches, never acts on them |
 | `universe --index "nifty 50" --out data/universe.txt` | Dump live index constituents to a universe file |
 | `regime` | Market traffic-light (breadth + index trend) → recommended exposure 100/60/30% |
 | `ai SYM` | Optional AI view. Works keyless (deterministic factpack); add any model key later |

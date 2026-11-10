@@ -176,6 +176,40 @@ def cmd_universe(args) -> int:
     return 0
 
 
+def cmd_notify(args) -> int:
+    from indtrader.alerts.briefing import maybe_notify
+
+    sent, reason = maybe_notify()
+    print(f"[notify] {'sent' if sent else 'not sent'}: {reason}")
+    return 0 if sent else 1
+
+
+def cmd_reconcile(args) -> int:
+    from indtrader.broker.fyers import FyersReadOnly
+    from indtrader.broker.reconcile import reconcile
+    from indtrader.execution.planlog import PlanLog
+
+    broker = FyersReadOnly()
+    if not broker.available():
+        print("FYERS_ACCESS_TOKEN not set (read-only token from Fyers dashboard) — nothing to compare",
+              file=sys.stderr)
+        return 1
+    log = PlanLog()
+    journal = log.executed_positions()
+    log.close()
+    holdings = broker.holdings()
+    rep = reconcile(journal, holdings)
+    for line in rep.lines():
+        print(line)
+    if rep.has_issues and not args.report_only:
+        from indtrader.alerts.telegram import send
+        from indtrader.config import get_settings
+
+        ok, reason = send("ind-trader reconcile\n" + "\n".join(rep.lines()), get_settings())
+        print(f"[reconcile] telegram: {'sent' if ok else reason}")
+    return 0
+
+
 def cmd_ai(args) -> int:
     from indtrader.ai.prompts import build_prompt
     from indtrader.ai.router import build_router
@@ -226,6 +260,10 @@ def main(argv=None) -> int:
     s.add_argument("--no-journal", action="store_true", help="don't write the shortlist to the signal journal")
     s.set_defaults(fn=cmd_scan)
     s = sub.add_parser("fetch-feeds"); s.add_argument("--days", type=int, default=7); s.set_defaults(fn=cmd_fetch_feeds)
+    s = sub.add_parser("notify"); s.set_defaults(fn=cmd_notify)
+    s = sub.add_parser("reconcile")
+    s.add_argument("--report-only", action="store_true", help="print only, never send Telegram")
+    s.set_defaults(fn=cmd_reconcile)
     s = sub.add_parser("universe")
     s.add_argument("--index", default="nifty 50")
     s.add_argument("--out", default="data/universe.txt")

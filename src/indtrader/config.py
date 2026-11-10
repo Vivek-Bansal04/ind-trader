@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     # --- Alerts (Phase 4) ---
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+    # --- Broker (read-only only; no order endpoints exist in code) ---
+    fyers_access_token: str = ""      # day-token from Fyers dashboard / app creation
 
     @property
     def ai_order(self) -> list[str]:

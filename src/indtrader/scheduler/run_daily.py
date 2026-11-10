@@ -28,6 +28,15 @@ def run_once(universe_file: str | None = None) -> dict[str, int]:
             print(f"[etl-loop] feeds: {feeds_res['status']} (kept last-known)")
     except Exception as e:
         print(f"[etl-loop] feeds failed (non-fatal): {e}")
+    # evening briefing to Telegram when configured (print-only otherwise)
+    try:
+        from indtrader.alerts.briefing import maybe_notify
+
+        sent, reason = maybe_notify()
+        if not sent:
+            print(f"[etl-loop] notify: {reason}")
+    except Exception as e:
+        print(f"[etl-loop] notify failed (non-fatal): {e}")
     return res
 
 

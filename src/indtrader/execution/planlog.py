@@ -32,14 +32,14 @@ class PlanLog:
     def record_signal(self, symbol: str, source: str, payload: dict) -> None:
         self.con.execute(
             "INSERT INTO signals VALUES (?,?,?,?,?)".replace("?,?,", "?,?,?,").replace("?,)", "?)"),
-            (datetime.utcnow(), symbol.upper(), source, json.dumps(payload, default=str)),
+            (datetime.utcnow().isoformat(sep=" "), symbol.upper(), source, json.dumps(payload, default=str)),
         )
         self.con.commit()
 
     def add_plan(self, plan: OrderPlan) -> int:
         cur = self.con.execute(
             "INSERT INTO plans(created,symbol,action,qty,entry,stop,target,reason,setup) VALUES (?,?,?,?,?,?,?,?,?)",
-            (datetime.utcnow(), plan.symbol.upper(), plan.action.upper(), plan.qty, plan.entry, plan.stop,
+            (datetime.utcnow().isoformat(sep=" "), plan.symbol.upper(), plan.action.upper(), plan.qty, plan.entry, plan.stop,
              plan.target, plan.reason, plan.setup),
         )
         self.con.commit()
@@ -59,6 +59,19 @@ class PlanLog:
 
     def open_plans(self):
         return self.con.execute("SELECT * FROM plans WHERE status='open' ORDER BY created").fetchall()
+
+    def executed_positions(self) -> dict[str, int]:
+        """Net quantity per symbol implied by EXECUTED plans (BUY +, SELL -).
+        This is the journal's view of intent that actually happened — reconcile
+        against broker holdings to find where reality diverged."""
+        rows = self.con.execute(
+            "SELECT symbol, action, qty FROM plans WHERE status='executed'"
+        ).fetchall()
+        out: dict[str, int] = {}
+        for symbol, action, qty in rows:
+            delta = int(qty) if str(action).upper() == "BUY" else -int(qty)
+            out[symbol] = out.get(symbol, 0) + delta
+        return {s: q for s, q in out.items() if q != 0}
 
     def close(self):
         self.con.close()

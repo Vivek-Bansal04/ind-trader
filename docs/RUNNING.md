@@ -65,6 +65,8 @@ Upserts are idempotent, so a missed night self-heals the next evening.
    (`planlog.add_plan`) with entry/stop/target/rationale.
 5. You place the CNC order manually at next morning's open (VRO or broker GTT/limit).
    The system never touches your broker.
+6. After executing: mark the plan `executed` in the journal; `cli reconcile` compares
+   journal vs Fyers holdings (read-only) and flags anything unexplained.
 
 ## Office laptop caveat (this machine)
 
