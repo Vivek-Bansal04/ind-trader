@@ -30,6 +30,7 @@ python -m indtrader.cli fetch RELIANCE     # real daily candles from NSE/Yahoo
 python -m indtrader.cli backtest RELIANCE --strategy trend_sma200 --costs
 python -m indtrader.cli backtest RELIANCE --strategy donchian --costs
 python -m indtrader.cli rrg RELIANCE TCS INFY TITAN SUNPHARMA --bench NIFTY
+python -m indtrader.cli scan                       # universe shortlist (evidence table + journal)
 python -m indtrader.cli regime
 python -m indtrader.cli ai RELIANCE        # works keyless (factpack) or with a model
 ```
@@ -58,7 +59,7 @@ Upserts are idempotent, so a missed night self-heals the next evening.
 
 1. 16:05 — ETL updates candles automatically (Docker loop or Windows Task Scheduler).
 2. Evening — `cli regime` → one of ON/NEUTRAL/OFF sets your max exposure.
-3. `cli rrg ...` + scanner (Phase 2) → shortlist; each candidate has evidence attached.
+3. `cli scan` → ranked shortlist with evidence (trend/RRG/momentum per symbol); `cli rrg ...` for the rotation picture.
 4. For each pick: `cli backtest <sym> --strategy <s> --costs` sanity + written plan
    (`planlog.add_plan`) with entry/stop/target/rationale.
 5. You place the CNC order manually at next morning's open (VRO or broker GTT/limit).

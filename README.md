@@ -16,6 +16,7 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `fetch RELIANCE` / `fetch-universe` | Download daily candles into the local store (NSE archive via NseIndiaApi, Yahoo fallback) |
 | `backtest SYM --strategy X --costs` | Daily-bar backtest with real Indian delivery costs and next-bar-open fills |
 | `rrg SYM SYM ... --bench NIFTY` | Clean-room Relative Rotation Graph: quadrant + quadrant transitions |
+| `scan` | Universe shortlist: one evidence row per symbol (trend, RRG quadrant, 6m momentum, vol), ranked; shortlist journaled to `plans.sqlite` |
 | `regime` | Market traffic-light (breadth + index trend) → recommended exposure 100/60/30% |
 | `ai SYM` | Optional AI view. Works keyless (deterministic factpack); add any model key later |
 | `run_daily` (Docker loop) | Nightly 16:05 IST ETL, idempotent upserts |

@@ -95,6 +95,45 @@ def cmd_regime(args) -> int:
     return 0
 
 
+def cmd_scan(args) -> int:
+    from indtrader.research.regime import regime_from_data
+    from indtrader.research.scanner import scan
+
+    store = BarStore()
+    closes, missing = {}, []
+    for sym in load_universe(args.file):
+        df = _load_or_fetch(store, sym)
+        if df.empty:
+            missing.append(sym)
+            continue
+        closes[sym] = df["close"]
+    idx = _load_or_fetch(store, args.index)
+    if not closes or idx.empty:
+        print("insufficient data — run fetch-universe first (home network)", file=sys.stderr)
+        if missing:
+            print("missing:", ", ".join(missing), file=sys.stderr)
+        return 1
+    regime = regime_from_data(closes, idx["close"])
+    table = scan(closes, bench=idx["close"], regime=regime, top=args.top)
+    print(f"regime={regime.label} exposure_scale={regime.exposure_scale} "
+          f"breadth={None if regime.breadth is None else round(regime.breadth, 2)}")
+    print(table.to_string(index=False))
+    if missing:
+        print(f"[scan] no data for: {', '.join(missing)}")
+    if not args.no_journal:
+        from indtrader.execution.planlog import PlanLog
+
+        log = PlanLog()
+        picks = table[table["tradable"] == True].head(args.top)  # noqa: E712
+        log.record_signal(
+            "UNIVERSE", "scan",
+            {"regime": regime.label, "exposure_scale": regime.exposure_scale,
+             "picks": picks[["symbol", "score", "quadrant", "mom_6m"]].to_dict("records")},
+        )
+        log.close()
+    return 0
+
+
 def cmd_ai(args) -> int:
     from indtrader.ai.prompts import build_prompt
     from indtrader.ai.router import build_router
@@ -138,6 +177,12 @@ def main(argv=None) -> int:
     s = sub.add_parser("rrg")
     s.add_argument("symbols", nargs="+"); s.add_argument("--bench", default="NIFTY"); s.set_defaults(fn=cmd_rrg)
     s = sub.add_parser("regime"); s.add_argument("--index", default="NIFTY"); s.set_defaults(fn=cmd_regime)
+    s = sub.add_parser("scan")
+    s.add_argument("--file", default=None, help="universe file (default: built-in sample)")
+    s.add_argument("--index", default="NIFTY")
+    s.add_argument("--top", type=int, default=10)
+    s.add_argument("--no-journal", action="store_true", help="don't write the shortlist to the signal journal")
+    s.set_defaults(fn=cmd_scan)
     s = sub.add_parser("ai"); s.add_argument("symbol"); s.set_defaults(fn=cmd_ai)
 
     args = p.parse_args(argv)
