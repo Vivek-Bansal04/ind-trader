@@ -46,7 +46,7 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `review` | Sunday review: benchmark week + regime, book vs executed plans (fills without a plan are flagged), journal hygiene, holding announcements, data health |
 | `plan SYM BUY --qty --entry --stop --target --reason "..."` | Written plan (Phase-4 door): rationale mandatory, stop<entry<target enforced at creation |
 | `plans [--all]` / `plan-mark ID STATUS` | Plan journal: open-first list, manual executed/cancelled/stale close-outs |
-| `fill ... --plan ID` | Fill that executes an OPEN plan: ledger note carries `plan#N`, plan flips to executed; unknown/closed plans refused |
+| `fill ... --plan ID` | Fill that executes an OPEN plan: ledger note keeps `plan#N` trace, plan flips to executed, per-fill slippage vs the planned entry printed; unknown/closed plans refused |
 | `attribution [--index]` | Realized P&L by setup × index-trend-at-entry; fills without a plan show as `unplanned`, missing index = `?` — never hidden |
 | `compare SYM [--strategies a,b] [--costs]` | A/B every strategy on the same window; default gross, `--costs` for full STT/slippage; prints the buy&hold bar to beat |
 | `harvest [--asof]` | Pre-March candidates from open FIFO lots × marks × FY realized LTCG: loss-harvest / free basis-reset (inside exemption) / taxable reset priced at 12.5%; unmarked symbols skipped and NAMED. Computation, not advice |

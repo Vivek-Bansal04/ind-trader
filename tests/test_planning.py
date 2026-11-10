@@ -37,6 +37,7 @@ def test_plan_lifecycle_plan_then_fill(tmp_path, monkeypatch, capsys):
         assert "plan#1" in note                       # fill carries the traceability
         out = capsys.readouterr().out
         assert "plan #1 -> executed" in out
+        assert "slippage vs plan entry 200.0: +1.00%" in out   # 202 filled vs 200 planned
 
 
 def test_plan_refuses_thin_reason_and_bad_ordering(tmp_path, monkeypatch, capsys):

@@ -774,16 +774,18 @@ def cmd_fill(args) -> int:
     when = args.date or _date.today().isoformat()
     note = args.note or ""
     log = PlanLog()
+    plan_row = None
     if args.plan:
-        row = log.con.execute("SELECT symbol, status FROM plans WHERE id=?", [args.plan]).fetchone()
-        if row is None:
+        plan_row = log.con.execute(
+            "SELECT symbol, status, entry, qty FROM plans WHERE id=?", [args.plan]).fetchone()
+        if plan_row is None:
             print(f"no plan #{args.plan} — create one first: indtrader plan SYM BUY ...",
                   file=sys.stderr)
             log.close()
             return 1
-        if row[1] != "open":
-            print(f"plan #{args.plan} is '{row[1]}', not open — fills only close OPEN plans",
-                  file=sys.stderr)
+        if plan_row[1] != "open":
+            print(f"plan #{args.plan} is '{plan_row[1]}', not open — fills only "
+                  "close OPEN plans", file=sys.stderr)
             log.close()
             return 1
     fid = log.add_fill(when, args.symbol, args.side, args.qty, args.price, args.costs,
@@ -791,8 +793,14 @@ def cmd_fill(args) -> int:
     if args.plan:
         log.mark(args.plan, "executed")
     log.close()
+    slip = ""
+    if plan_row is not None:
+        p_entry, p_qty = float(plan_row[2]), float(plan_row[3])
+        sl = (args.price - p_entry) / p_entry if p_entry else 0.0
+        slip = (f" — slippage vs plan entry {p_entry}: {sl:+.2%} on this fill"
+                + ("" if args.qty == p_qty else f" (planned qty {p_qty:g}, filled {args.qty:g})"))
     print(f"ledger fill #{fid}: {args.side} {args.qty} {args.symbol.upper()} @ {args.price} on {when}"
-          + (f" (plan #{args.plan} -> executed)" if args.plan else ""))
+          + (f" (plan #{args.plan} -> executed{slip})" if args.plan else ""))
     return 0
 
 
