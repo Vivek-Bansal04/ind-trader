@@ -328,6 +328,54 @@ def cmd_pbacktest(args) -> int:
     return 0
 
 
+def cmd_gate(args) -> int:
+    """Walk-forward + plateau gate over one symbol. Exit 2 means the strategy FAILED
+    the gate — that is a result, not an error, but CI/scripts can key on it."""
+    from indtrader.backtest.costs import DeliveryCosts
+    from indtrader.backtest.strategies import REGISTRY
+    from indtrader.backtest.walkforward import walk_forward_gate
+
+    df = _load_or_fetch(BarStore(), args.symbol)
+    if df.empty:
+        print("no data", file=sys.stderr)
+        return 1
+    grid: dict[str, list] = {}
+    for item in args.param or []:
+        k, _, vs = item.partition("=")
+        if not vs:
+            print(f"bad --param '{item}' (want name=v1,v2,...)", file=sys.stderr)
+            return 1
+        grid[k.strip()] = [float(x) if "." in x else int(x) for x in vs.split(",")]
+    if not grid:
+        print("needs at least one --param, e.g. --param period=150,200,250", file=sys.stderr)
+        return 1
+    rep = walk_forward_gate(df, REGISTRY[args.strategy], grid, costs=DeliveryCosts(),
+                            metric=args.metric, warmup=args.warmup, test_days=args.test_days,
+                            progress=lambda m: print(f"[gate] {m}"))
+    print(pd.DataFrame(rep.as_rows()).to_string(index=False))
+    print(f"{'PASS' if rep.passed else 'FAIL'}: {rep.strategy} metric={rep.metric}")
+    for r in rep.reasons:
+        print(f" - {r}")
+    return 0 if rep.passed else 2
+
+
+def cmd_montecarlo(args) -> int:
+    from indtrader.backtest.costs import DeliveryCosts
+    from indtrader.backtest.engine import Backtester
+    from indtrader.backtest.montecarlo import monte_carlo
+    from indtrader.backtest.strategies import REGISTRY
+
+    df = _load_or_fetch(BarStore(), args.symbol)
+    if df.empty:
+        print("no data", file=sys.stderr)
+        return 1
+    res = Backtester(costs=DeliveryCosts(), capital=args.capital).run(
+        df, REGISTRY[args.strategy](), symbol=args.symbol.upper())
+    out = monte_carlo(res, capital=args.capital, seed=args.seed)
+    print(json.dumps(out, indent=1))
+    return 0 if out.get("ok") else 1
+
+
 def cmd_ai(args) -> int:
     from indtrader.ai.prompts import build_prompt
     from indtrader.ai.router import build_router
@@ -416,6 +464,20 @@ def main(argv=None) -> int:
     s.add_argument("--capital", type=float, default=1_000_000.0)
     s.add_argument("--positions", type=int, default=5)
     s.set_defaults(fn=cmd_pbacktest)
+    s = sub.add_parser("gate", help="walk-forward + parameter-plateau gate; exit 2 = strategy failed")
+    s.add_argument("symbol")
+    s.add_argument("--strategy", default="trend_sma200")
+    s.add_argument("--param", action="append", help="name=v1,v2 (repeatable), e.g. period=150,200,250")
+    s.add_argument("--metric", default="sharpe", choices=["sharpe", "cagr", "profit_factor"])
+    s.add_argument("--warmup", type=int, default=400)
+    s.add_argument("--test-days", dest="test_days", type=int, default=252)
+    s.set_defaults(fn=cmd_gate)
+    s = sub.add_parser("montecarlo", help="bootstrap distribution of outcomes from costed trades")
+    s.add_argument("symbol")
+    s.add_argument("--strategy", default="trend_sma200")
+    s.add_argument("--capital", type=float, default=1_000_000.0)
+    s.add_argument("--seed", type=int, default=12345)
+    s.set_defaults(fn=cmd_montecarlo)
     s = sub.add_parser("universe")
     s.add_argument("--index", default="nifty 50")
     s.add_argument("--out", default="data/universe.txt")
