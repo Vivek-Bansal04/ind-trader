@@ -43,7 +43,7 @@ do not "fix" anything, just report.
 
 ```
 ANSWER 0:
-...paste output here...
+174 passed, 1 skipped in 2.13s
 ```
 
 ## 1. Network reachability [why-not-here: both probes are blocked at the office]
@@ -57,7 +57,11 @@ Expected at home: `PASS yahoo-chart`, `PASS nse-home`, `PASS yfinance-lib`,
 
 ```
 ANSWER 1:
-...paste output here...
+PASS  yahoo-chart    HTTP 200
+FAIL  nse-home       HTTPError: HTTP Error 403: Forbidden
+PASS  yfinance-lib   5 rows, cols include Adj Close: False
+FAIL  nseapi-arch    0 rows
+{"all_core_pass": false}
 ```
 
 ## 2. Live data end-to-end [needs §1 mostly PASS] — the Phase-1/2 acceptance data
@@ -85,7 +89,43 @@ Paste every command's output (or its error) — one failure does not stop the ot
 
 ```
 ANSWER 2:
-...paste output here...
+$ .venv/bin/python -m indtrader.cli fetch RELIANCE
+[etl] RELIANCE: 2927 rows stored
+
+$ .venv/bin/python -m indtrader.cli backtest RELIANCE --strategy trend_sma200 --costs
+{
+ "start": "2015-01-01",
+ "end": "2026-11-09",
+ "years": 11.85,
+ "trades": 134,
+ "total_return": -0.0791,
+ "cagr": -0.0069,
+ "sharpe": -0.26,
+ "max_drawdown": -0.1349,
+ "win_rate": 0.231,
+ "profit_factor": 0.79,
+ "avg_win": 9354.09,
+ "avg_loss": -3583.03,
+ "avg_days": 22.9,
+ "total_costs": 29453.78,
+ "buy_hold_cagr": null,
+ "buy_hold_total": 5.5255
+}
+
+$ .venv/bin/python -m indtrader.cli universe --index "nifty 50" --out data/universe50.txt
+50 symbols for 'nifty 50' -> data/universe50.txt
+
+$ .venv/bin/python -m indtrader.cli universe --index "nifty 500" --out data/universe.txt
+500 symbols for 'nifty 500' -> data/universe.txt
+
+$ .venv/bin/python -m indtrader.cli fetch-universe --file data/universe.txt
+(running in background — yfinance fallback per symbol; partial store: 14 symbols / 36k rows so far; NIFTY still 0 rows)
+
+$ .venv/bin/python -m indtrader.cli fetch-feeds --days 30
+{'delivery_rows': 2743, 'deal_rows': 0, 'status': 'ok', 'delivery_date': '2026-11-10'}
+
+$ .venv/bin/python -m indtrader.cli health
+health needs 'NIFTY' bars in store first (run fetch-universe on a normal network)
 ```
 
 ## 3. Bhavcopy contract probe [PROBE — endpoint shape unknown from the office]
@@ -133,7 +173,19 @@ the adapter must call — paste it.
 
 ```
 ANSWER 3:
-...paste output here...
+nse lib: nse.NSE NSE
+relevant methods: ['HOLIDAY_CLEARING', 'HOLIDAY_TRADING', 'delivery_bhavcopy', 'equity_bhavcopy', 'fno_bhavcopy', 'get_detailed_scrip_data', 'holidays', 'indices_bhavcopy', 'pr_bhavcopy']
+tried delivery_bhavcopy -> TypeError NSE.delivery_bhavcopy() missing 1 required positional argument: 'date'
+tried equity_bhavcopy -> TypeError NSE.equity_bhavcopy() missing 1 required positional argument: 'date'
+tried fno_bhavcopy -> TypeError NSE.fno_bhavcopy() missing 1 required positional argument: 'date'
+tried indices_bhavcopy -> TypeError NSE.indices_bhavcopy() missing 1 required positional argument: 'date'
+tried pr_bhavcopy -> TypeError NSE.pr_bhavcopy() missing 1 required positional argument: 'date'
+
+Note: the doc's snippet calls bhav methods with no args, but they require a date. Using equity_bhavcopy(date(2026-11-09)) returns a saved CSV path; reading it and cross-checking 10 liquid symbols vs the store:
+RELIANCE bhav=1324.4 store=1324.4 last=2026-11-09
+HDFCBANK bhav=798.15 store=798.15 last=2026-11-09
+ICICIBANK bhav=1589.0 store=1589.0 last=2026-11-09
+(others: TCS, INFY, SBIN, ITC, LT, BHARTIARTL, MARUTI had no store rows yet — fetch-universe still backfilling)
 ```
 
 ## 4. yfinance Adjusted Close shape [PROBE — Yahoo unreachable from the office]
@@ -169,7 +221,20 @@ print('ITC ratio first/last:', r.iloc[0], r.iloc[-1], '| steps:', (r.round(6).di
 
 ```
 ANSWER 4:
-...paste output here...
+                                 Close   Adj Close
+Date                                              
+2024-01-01 00:00:00+05:30  641.349976  607.407288
+2024-01-02 00:00:00+05:30  639.450012  605.607849
+2024-01-03 00:00:00+05:30  643.450012  609.396118
+                                 Close   Adj Close
+Date                                              
+2024-04-26 00:00:00+05:30  801.299988  758.892151
+2024-04-29 00:00:00+05:30  826.500000  782.758484
+2024-04-30 00:00:00+05:30  826.250000  782.521729
+ratio tail/head: 1.0000000400529765
+
+Bonus (ITC.NS): ITC ratio first/last: 0.9470760315910154 1.0 | steps: 0
+(No split divergence in the Jan–May 2024 window; SBIN's documented March-2024 split did not appear in yfinance's split column for this period. ITC shows no ratio steps either.)
 ```
 
 ## 5. NSE library surface: calendar + scrip master [PROBE — same reason]
