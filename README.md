@@ -164,5 +164,17 @@ rebalance proposals with the tax lens, MF slice + CA income surfaced in review a
 riskreport. Phase 5 stays gated on
 Phase 4 passing, per plan; its buildable surface already exists (read-only reconcile,
 journal, sizing).
-Next: the laptop session (ROUND3-TODO.md), then the Phase-4 clock; deferred backlog:
-screener.in fundamentals (where the endpoint is verifiable).
+Next: the laptop session (ROUND3-TODO.md), then the Phase-4 clock. Deferred backlog —
+each item gets built only if it earns its place, otherwise dropped:
+- screener.in fundamentals (where the endpoint is verifiable).
+- NSE's official MCP server (nseindia.com/nse-mcp, live since ~Jun 2026, no key).
+  Probed 2026-11-11: `https://mcp.nseindia.in/bhavcopy/cm/mcp` answers MCP
+  initialize + tools/list (21 tools) **even from the office network** that 403s
+  every other NSE endpoint. Not a store replacement (5y window, unadjusted
+  prices, plain bhavcopy = what `contract-test` already validates us against).
+  Candidates if ever adopted, all read-only: `get_index_valuation` (index PE/PB/
+  yield + percentile — the §C "index valuation" item), `get_market_mood` (India
+  VIX for the regime light), `get_corporate_actions` (official NSE adjustmentFactor
+  as a second source to cross-check our yfinance `fetch-adj` factors). Terms:
+  educational use only, no trading/commercial. v1.0.0, six months old — any
+  wiring must refuse loudly on shape drift like everything else here.
