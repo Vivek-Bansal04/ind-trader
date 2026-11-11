@@ -56,7 +56,7 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `coractions SYM [--from-raw\|--set\|--gap-list]` | The split-factor cure: probe every method/arg-form with a shape inventory; `--from-raw` replays the confirmed-shape parser offline; `--set DATE\|KIND\|RATIO` records one human-confirmed event (ratio = price multiplier) when NSE's text states none; `--gap-list` batch-probes every symbol `health` names. Ratios only from stated numbers or humans — unresolved events are NAMED, never guessed |
 | `news [SYMS] [--no-fetch] [--days]` | External news (Google News RSS, no key) for holdings + MARKET — triaged with the SAME RED/AMBER vocabulary as `ann`, so a headline can't invent a new category. Transport is `data.http` (curl_cffi impersonation where present: the round-5 laptop 403'd plain urllib) and the fetch line names which transport ran. A dead feed prints as an outage, never as a quiet evening; tests are offline |
 | `backup [--keep N]` / `restore KIND FILE` | Sqlite online backup (safe mid-ETL) + `PRAGMA integrity_check` on every copy; restore refuses corrupt backups, keeps `.pre-restore` |
-| `dashboard [--port 8765]` | Read-only one-page web UI on 127.0.0.1: banner (NIFTY + staleness + PAUSED), book vs plans, open plans, last scan, journal gaps, health strip. Stdlib only, zero write paths |
+| `dashboard [--host 127.0.0.1] [--port 8765]` | Read-only one-page web UI: banner (NIFTY + staleness + PAUSED), health strip, ETL/Phase-4 view, freshness heatmap + server-side sparklines (generated SVG — no JS charts, no packages), split-gap ledger (same helper as `health`, can't drift), UNRESOLVED corporate actions, holiday drift ledger, triaged news, shareholding alerts, book vs plans, last scan, journal gaps. Stdlib only, zero write paths; non-loopback bind is an explicit `--host` and prints a no-auth warning (Docker maps it to host loopback) |
 | `universe --index "nifty 50" --out data/universe.txt` | Dump live index constituents to a universe file |
 | `regime` | Market traffic-light (breadth + index trend) → recommended exposure 100/60/30%, plus the exact levels that would flip the light and the follow-through (FTD) status |
 | `ai SYM` | Optional AI view. Works keyless (deterministic factpack); add any model key later |
@@ -76,9 +76,12 @@ python -m indtrader.cli backtest RELIANCE --strategy trend_sma200 --costs
 Full guide including Docker automation: **`docs/RUNNING.md`**.
 
 ```bash
-# Docker one-liner equivalent of the whole nightly pipeline
-docker compose up -d etl-loop
-docker compose run --rm cli backtest RELIANCE --strategy donchian --costs
+# The WHOLE project in one command: nightly ETL loop + read-only dashboard,
+# data persisted in ./data, no .env required, image carries [nse,web] so the
+# container behaves like the laptop (curl_cffi transport included).
+docker compose up -d          # then open http://127.0.0.1:8765
+docker compose run --rm cli health
+docker compose run --rm etl-once
 ```
 
 ## Where data lives

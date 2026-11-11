@@ -1,9 +1,11 @@
-# ind-trader — one image for CLI + scheduled ETL.
-# Usage:
+# ind-trader — one image for the WHOLE project: CLI, scheduled ETL, dashboard.
+# Everything runs from this image with nothing else installed on the host:
+#   docker compose up -d          (etl-loop + dashboard; data persists in ./data)
+#   docker compose run --rm cli health
+#   docker compose run --rm etl-once
+# Plain docker:
 #   docker build -t indtrader .
-#   docker run --rm -v %cd%/data:/app/data indtrader backtest RELIANCE --strategy trend_sma200 --costs
-#   docker compose up etl-once     (fetch universe once)
-#   docker compose up -d etl-loop  (daily 16:05 IST fetch)
+#   docker run --rm -v ./data:/home/appuser/data indtrader python -m indtrader.cli health
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
@@ -14,7 +16,9 @@ RUN useradd -m appuser
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install .[nse]
+# [nse] = the NSE lib, [web] = curl_cffi Chrome transport — without these the
+# container would be a datacenter-IP box with a silently-deep-sixed news feed.
+RUN pip install .[nse,web]
 
 USER appuser
 ENV HOME=/home/appuser

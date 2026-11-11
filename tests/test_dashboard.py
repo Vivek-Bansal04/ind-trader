@@ -47,8 +47,10 @@ def test_snapshot_composes_without_inventing(seeded):
     snap = snapshot(store, log, ["TATA"])
     assert "NIFTY 25,024" in snap["banner"] and "STALE" not in snap["banner"]
     assert snap["book"][0][0] == "TATA" and snap["book"][0][2] == 205.5     # marked from store
+    assert snap["book"][0][4].startswith("<svg")                             # server-side sparkline
     assert snap["regime"]["label"] == "NEUTRAL"
-    assert snap["shortlist"] == [["TATA", "Leading", 0.8, "momo"]]
+    assert snap["shortlist"][0][0] == "TATA" and snap["shortlist"][0][2] == 0.8
+    assert snap["shortlist"][0][4] == "momo" and snap["shortlist"][0][3].startswith("<svg")
     assert snap["problems"] == []                                           # fill traces to executed plan
     assert snap["health"]["problem"] == 0
 
@@ -83,3 +85,91 @@ def test_http_roundtrip(seeded):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# ---- ledger sections + honest absence -------------------------------------------
+
+def test_ledger_sections_and_heatmap(seeded):
+    store, log = seeded
+    import numpy as np
+
+    days = pd.date_range("2026-10-01", periods=25, freq="B")
+    closes = np.array([100.0] * 12 + [50.0] * 13)          # −50% cliff, no factor -> gap
+    store.upsert_candles("CLIFFD", "daily",
+                         pd.DataFrame({"open": closes, "high": closes, "low": closes,
+                                       "close": closes, "volume": 1e5}, index=days), "test")
+    from indtrader.research.coractions import upsert_corporate_actions
+
+    upsert_corporate_actions(store, "CLIFFD", [{"date": "2026-10-06", "kind": "Bonus Issue"}])   # unresolved
+    upsert_corporate_actions(store, "CLIFFD", [{"date": "2026-10-07", "kind": "Dividend Rs 12"}])  # complete as-is
+    from indtrader.data.macrocal import ensure as cal_ensure
+
+    cal_ensure(store)
+    store.con.execute("INSERT INTO calendar_events VALUES ('2026-10-05','master',0,'fake drift','{}','now')")
+    store.con.execute("INSERT INTO calendar_events VALUES ('2026-11-06','master',0,'real holiday','{}','now')")
+    store.con.commit()
+    from indtrader.data.news import store_news
+
+    store_news(store, "MARKET", [{"title": "TCS downgrade: margin outlook cut",
+                                  "link": "http://x/1", "pubDate": ""}], "test")
+    store_news(store, "MARKET", [{"title": "Market ends flat on quiet session",
+                                  "link": "http://x/2", "pubDate": ""}], "test")
+    snap = snapshot(store, log, ["TATA", "CLIFFD"])
+    assert [r[0] for r in snap["split_gaps"]] == ["CLIFFD"] and "-50%" in snap["split_gaps"][0][1]
+    assert snap["unresolved_ca"] == [["CLIFFD", "2026-10-06", "Bonus Issue"]]   # dividend NOT flagged
+    assert "2026-10-05" in snap["holidays"]["disputed"]                          # holiday WITH a NIFTY bar
+    assert "2026-11-06" not in snap["holidays"]["disputed"]                      # no bar = genuine, stays out
+    assert snap["news"] and "downgrade" in snap["news"][0][2].lower()            # AMBER triage applied
+    assert all("flat" not in r[2] for r in snap["news"])                         # quiet headline not flagged
+    heat = {r[0]: r[1] for r in snap["heat"]["rows"]}
+    assert heat["TATA"] and all(v == "fresh" for v in heat["TATA"].values())
+    assert heat["CLIFFD"] and all(v == "fresh" for v in heat["CLIFFD"].values())
+    assert any(r[0] == "clean-day streak" and "not persisted" in r[1] for r in snap["etl"])
+
+
+def test_honest_absences(seeded):
+    store, log = seeded
+    snap = snapshot(store, log, [])          # empty universe -> health error wording intact
+    assert snap["health"]["error"]
+    snap = snapshot(store, log, ["TATA"])
+    # no news table at all -> "never fetched", NOT "quiet":
+    assert snap["news"] == [] and "not fetched" in snap["news_note"]
+    assert snap["unresolved_ca"] == [] and snap["split_gaps"] == []
+    assert snap["holidays"]["coverage"] is None
+    assert "not fetched" in snap["holidays"]["master_missing"]
+
+
+def test_sparkline_svg_rules():
+    from indtrader.web.dashboard import sparkline
+
+    s = sparkline([1, 2, 3, 4, 5])
+    assert s.startswith("<svg") and "polyline" in s and "#1a7f37" in s     # rising = green
+    assert "#b3261e" in sparkline([5, 4, 3, 2, 1])                          # falling = red
+    assert "stroke-dasharray" in sparkline([3, 3, 3])                        # flat = dash, no lie
+    assert "stroke-dasharray" in sparkline([]) and "stroke-dasharray" in sparkline([None, "x"])
+
+
+def test_serve_cleans_up_on_ctrl_c(tmp_path, monkeypatch):
+    """Ctrl-C must exit 0: the per-request-connection refactor once left dead
+    store/log closes in serve()'s finally — a NameError on every shutdown."""
+    import threading
+
+    import indtrader.web.dashboard as wb
+    from indtrader.config import get_settings
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    get_settings.cache_clear()
+
+    class FakeSrv:
+        def __init__(self, *a):
+            pass
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr("http.server.ThreadingHTTPServer", FakeSrv)
+    assert wb.serve(port=0) == 0
+    get_settings.cache_clear()

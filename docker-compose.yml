@@ -1,18 +1,38 @@
+# Whole project in one place: ETL loop + read-only dashboard + on-demand CLI.
+#   docker compose up -d      -> etl-loop + dashboard, data persisted in ./data
+#   open http://127.0.0.1:8765
 services:
   etl-loop:
     build: .
     container_name: indtrader-etl
     restart: unless-stopped
     env_file:
-      - .env            # AI keys etc. live here (git-ignored)
+      - path: .env        # optional (Compose v2.24+): no .env, still `up` fine
+        required: false   # AI keys etc. live here (git-ignored)
     volumes:
       - ./data:/home/appuser/data   # candles sqlite + plan journal persist HERE
     command: ["python", "-m", "indtrader.scheduler.run_daily"]
 
+  dashboard:
+    build: .
+    container_name: indtrader-dash
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/home/appuser/data   # read-only use of the same sqlite stores
+    ports:
+      - "127.0.0.1:8765:8765"       # loopback map only — this service has NO auth
+    # 0.0.0.0 inside the container is deliberate: the port map above keeps it
+    # loopback on the host. The server prints its own warning because no auth.
+    command: ["python", "-m", "indtrader.cli", "dashboard", "--host", "0.0.0.0", "--port", "8765"]
+
   etl-once:
     build: .
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./data:/home/appuser/data
     command: ["python", "-c", "from indtrader.scheduler.run_daily import run_once; run_once()"]
@@ -21,7 +41,8 @@ services:
   cli:
     build: .
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./data:/home/appuser/data
     entrypoint: ["python", "-m", "indtrader.cli"]

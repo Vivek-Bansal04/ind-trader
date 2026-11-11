@@ -21,6 +21,11 @@ dependencies = [
 dev = ["pytest>=8"]
 # NSE as primary data source (GPL library kept as an arm's-length dependency):
 nse = ["NseIndiaApi>=5"]
+# Chrome-impersonation transport for news/calendar — the ONLY transport that
+# clears the laptop-network WAF (round-5: plain urllib got 403 there, curl_cffi
+# returned 100 items). The Docker image installs this so a container behaves
+# like the laptop, not like a datacenter box with silently-dead feeds.
+web = ["curl-cffi>=0.7"]
 # HRP portfolio weights; when the lib-vs-scipy combo is broken, weights auto-fall
 # back to inverse_vol with a loud message (see docs/HOME-VALIDATION.md item 6):
 opt = ["PyPortfolioOpt>=1.5.5"]

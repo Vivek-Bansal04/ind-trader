@@ -17,6 +17,8 @@ import pandas as pd
 from indtrader.config import get_settings
 from indtrader.data.store import BarStore
 from indtrader.data.universe import load_universe
+from indtrader.research.splitgaps import SPLIT_JUMP  # noqa: F401 (health names it)
+from indtrader.research.splitgaps import symbol_split_gaps as _symbol_split_gaps
 from indtrader.scheduler.etl import fetch_universe, build_providers
 from indtrader.ta import atr, rsi, sma
 
@@ -345,29 +347,8 @@ def cmd_holidays(args) -> int:
         store.close()
 
 
-def _symbol_split_gaps(store: BarStore, sym: str, df: pd.DataFrame, jump: float) -> list[str]:
-    """The SPLIT-GAP arithmetic for ONE symbol (shared by `health` and
-    `coractions --gap-list` so the two can never drift): every |raw move| >=
-    jump must be matched by a MERGED-factor step of split size that day
-    (F = adj/raw back-adjustment: a 1:2 split halves closes at d and steps F
-    by ~2.0 there). A step of ~1.0 (dividend-only) leaves the cliff in the
-    ADJUSTED series — the round-4 HDFCBANK lie. Returns ['date +x%', ...]."""
-    fc = store.combined_factors(sym)
-    gaps = []
-    pct = df["close"].pct_change()
-    for ts, p in pct[pct.abs() >= jump].items():
-        d = pd.Timestamp(ts)
-        step = None
-        if len(fc):
-            before = fc[fc.index < d]
-            on = fc[fc.index <= d]
-            if len(on):  # no factor at/before d at all -> step None -> gap
-                b = float(before.iloc[-1]) if len(before) else 1.0
-                step = round(float(on.iloc[-1]) / b, 3) if b else None
-        covered = step is not None and (0.4 <= step <= 0.7 or 1.4 <= step <= 2.5)
-        if not covered:
-            gaps.append(f"{d.date()} {p:+.0%}" + (f" (factor step {step})" if step else ""))
-    return gaps
+# _symbol_split_gaps: imported above from indtrader.research.splitgaps — the ONE
+# implementation shared by `health`, `coractions --gap-list` and the dashboard.
 
 
 def cmd_health(args) -> int:
@@ -379,7 +360,6 @@ def cmd_health(args) -> int:
     mean 'covers every big raw move', not 'some factors stored'."""
     from indtrader.research.calendar import index_sessions, missing_sessions, staleness_days
 
-    SPLIT_JUMP = 0.35  # raw one-day move this big is split/bonus until proven otherwise
     store = BarStore()
     try:
         idx = store.load(args.index)
@@ -934,7 +914,7 @@ def cmd_restore(args) -> int:
 def cmd_dashboard(args) -> int:
     from indtrader.web.dashboard import serve
 
-    return serve(port=args.port)
+    return serve(host=args.host, port=args.port)
 
 
 def cmd_bot(args) -> int:
@@ -1560,6 +1540,8 @@ def main(argv=None) -> int:
     s.add_argument("backup")
     s.set_defaults(fn=cmd_restore)
     s = sub.add_parser("dashboard", help="read-only one-page web dashboard on 127.0.0.1")
+    s.add_argument("--host", default="127.0.0.1",
+                   help="only relax beyond 127.0.0.1 inside a container you port-map yourself")
     s.add_argument("--port", type=int, default=8765)
     s.set_defaults(fn=cmd_dashboard)
     s = sub.add_parser("fetch-feeds"); s.add_argument("--days", type=int, default=7); s.set_defaults(fn=cmd_fetch_feeds)

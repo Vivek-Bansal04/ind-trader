@@ -43,8 +43,9 @@ never a crash.
 ## With Docker (automation)
 
 ```bash
-copy .env.example .env
+copy .env.example .env        # optional (Compose v2.24+): the stack runs without it
 docker build -t indtrader .
+docker compose up -d                                             # EVERYTHING: etl-loop + dashboard -> http://127.0.0.1:8765
 docker compose run --rm etl-once                                   # fetch once now
 docker compose up -d etl-loop                                      # auto-fetch every weekday 16:05 IST
 docker compose run --rm cli backtest RELIANCE --strategy donchian --costs

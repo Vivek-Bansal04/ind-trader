@@ -1,0 +1,15 @@
+# The image copies pyproject + README + src only — never these:
+.git
+.idea
+.venv
+data
+tests
+docs
+.env            # secrets stay on the host; compose passes them via env_file
+*.sqlite
+*.egg-info
+__pycache__
+.pytest_cache
+.dockerignore
+Dockerfile
+docker-compose.yml
