@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from datetime import date, timedelta
 
+import pandas as pd
+
 from indtrader.config import Settings, get_settings
 from indtrader.data.base import DataSource
 from indtrader.data.store import BarStore
@@ -37,13 +39,49 @@ def build_providers(settings: Settings) -> list[DataSource]:
     return out
 
 
+def _history_shape(store: BarStore, symbol: str) -> tuple[str | None, str | None, int]:
+    """First/last session dates and row count straight from sqlite — cheap enough
+    to run per symbol without loading candles."""
+    row = store.con.execute(
+        "SELECT min(d), max(d), count(*) FROM candles WHERE symbol=? AND tf='daily'",
+        [symbol.upper()]).fetchone()
+    return (row[0], row[1], int(row[2] or 0)) if row else (None, None, 0)
+
+
+def _is_complete_and_fresh(store: BarStore, symbol: str, start: str,
+                           fresh_bdays: int, today: date) -> bool:
+    """Skip candidate: tail within fresh_bdays business days of today AND history
+    reaching back to ~start (so a fresh-tailed but shallow series is refetched,
+    not declared done). Missing on either side -> False -> fetch."""
+    import numpy as np
+
+    first, last, n = _history_shape(store, symbol)
+    if n == 0 or not last:
+        return False
+    if int(np.busday_count(pd.Timestamp(last).date(), today)) > fresh_bdays:
+        return False
+    return first is not None and (pd.Timestamp(first).date()
+                                  - pd.Timestamp(start).date()).days <= 45
+
+
 def fetch_universe(symbols: list[str], store: BarStore | None = None, providers: list[DataSource] | None = None,
-                   start: str = "2015-01-01", pause_s: float = 0.3) -> dict[str, int]:
+                   start: str = "2015-01-01", pause_s: float = 0.3,
+                   skip_fresh: bool = False, fresh_bdays: int = 3) -> dict[str, int]:
+    """Fetch (or top up) each symbol. skip_fresh=True makes the nightly loop and a
+    resumed backfill cheap: a symbol whose tail is current AND whose history
+    reaches ~start is skipped outright. Both conditions required — 'fresh tail'
+    alone would declare a shallow series done, and that's the kind of quiet
+    shortening that fakes a backtest. Default off: an explicit `fetch` always fetches."""
     providers = providers or build_providers(get_settings())
     store = store or BarStore()
     results: dict[str, int] = {}
     end = (date.today() + timedelta(days=1)).isoformat()
     for sym in symbols:
+        if skip_fresh and _is_complete_and_fresh(store, sym, start, fresh_bdays, date.today()):
+            _, last, n = _history_shape(store, sym)
+            print(f"[etl] {sym}: fresh ({n} rows, last bar {last}) — skipped")
+            results[sym] = 0
+            continue
         rows = 0
         for prov in providers:  # first provider that yields data wins
             try:
@@ -63,7 +101,7 @@ def fetch_universe(symbols: list[str], store: BarStore | None = None, providers:
 
 def run_etl(universe_file=None, store: BarStore | None = None) -> dict[str, int]:
     symbols = load_universe(universe_file)
-    return fetch_universe(symbols, store=store)
+    return fetch_universe(symbols, store=store, skip_fresh=True)
 
 
 def fetch_adj_factors(symbols: list[str], store: BarStore | None = None,

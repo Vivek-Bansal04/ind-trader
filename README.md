@@ -13,7 +13,7 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 
 | Command | Purpose |
 |---|---|
-| `fetch RELIANCE` / `fetch-universe` | Download daily candles into the local store (NSE archive via NseIndiaApi, Yahoo fallback) |
+| `fetch RELIANCE` / `fetch-universe [--skip-fresh]` | Download daily candles into the local store (NSE archive via NseIndiaApi, Yahoo fallback); `--skip-fresh` skips symbols already complete-and-current (the nightly loop uses it by default, so re-runs cost milliseconds, not 10 years × 500 symbols) |
 | `backtest SYM --strategy X --costs` | Daily-bar backtest with real Indian delivery costs and next-bar-open fills |
 | `rrg SYM SYM ... --bench NIFTY` | Clean-room Relative Rotation Graph: quadrant + quadrant transitions |
 | `scan` | Universe shortlist: one evidence row per symbol (trend, RRG quadrant, 6m momentum, delivery %, bulk deals, 20d turnover, compression, vol), ranked; illiquid names (<₹2Cr/day before the signal) dropped; shortlist journaled to `plans.sqlite` |

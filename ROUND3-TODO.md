@@ -16,20 +16,20 @@ git pull
 
 ## 1. Finish the backfill (the one long step — start it and let it run)
 
-Round 2 got ~33/500 symbols. Honest timing: re-runs are SAFE (upserts, no
-duplicates) but not fast — each symbol re-downloads its history from 2015
-(~15 s each, so the full file is ~2 h end to end). Let it run to completion once;
-if you must stop, paste what printed and note roughly how far it got — the next
-run continues where the data is missing, it just re-checks from the start.
+Round 2 got ~33/500 symbols. `--skip-fresh` (added after this doc was first
+written) makes the re-run cheap: symbols already holding a full 2015->today
+history are skipped in milliseconds; only the missing/shallow ones are fetched.
+If you must stop mid-way, just run the same command again — it resumes.
 
 ```bash
-.venv/bin/python -m indtrader.cli fetch-universe --file data/universe.txt
+.venv/bin/python -m indtrader.cli fetch-universe --file data/universe.txt --skip-fresh
 .venv/bin/python -m indtrader.cli fetch-adj --file data/universe.txt
 .venv/bin/python -m indtrader.cli health --file data/universe.txt
 ```
 
-If you have to stop mid-way, paste what printed and note roughly how many symbols
-it did — partial is usable, next round continues.
+`fetch-adj` re-downloads factors per symbol (no skip flag) — budget ~15 s per
+already-done symbol there. If you have to stop either one, paste what printed
+and note roughly how far it got — partial is usable, next round continues.
 
 >>> PASTE 1 — all three outputs (tail is fine if fetch-universe scrolls forever):
 ```

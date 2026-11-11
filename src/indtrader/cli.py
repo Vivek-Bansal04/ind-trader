@@ -40,7 +40,7 @@ def cmd_fetch(args) -> int:
 
 
 def cmd_fetch_universe(args) -> int:
-    res = fetch_universe(load_universe(args.file))
+    res = fetch_universe(load_universe(args.file), skip_fresh=args.skip_fresh)
     print(json.dumps(res, indent=1))
     return 0
 
@@ -1242,7 +1242,12 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("fetch"); s.add_argument("symbol"); s.set_defaults(fn=cmd_fetch)
-    s = sub.add_parser("fetch-universe"); s.add_argument("--file", default=None); s.set_defaults(fn=cmd_fetch_universe)
+    s = sub.add_parser("fetch-universe")
+    s.add_argument("--file", default=None)
+    s.add_argument("--skip-fresh", dest="skip_fresh", action="store_true",
+                   help="skip symbols whose tail is current AND history reaches --start "
+                        "(resume-friendly backfill; nightly loop does this by default)")
+    s.set_defaults(fn=cmd_fetch_universe)
     s = sub.add_parser("backtest")
     s.add_argument("symbol")
     s.add_argument("--strategy", default="trend_sma200")
