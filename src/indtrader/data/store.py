@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS adj_factors(
     symbol TEXT, d TEXT, factor REAL, source TEXT,
     PRIMARY KEY (symbol, d)
 );
+CREATE TABLE IF NOT EXISTS corporate_actions(
+    symbol TEXT, d TEXT, kind TEXT, ratio REAL,
+    PRIMARY KEY (symbol, d, kind)
+);
+CREATE TABLE IF NOT EXISTS split_factors(
+    symbol TEXT, d TEXT, ratio REAL,
+    PRIMARY KEY (symbol, d)
+);
 """
 
 
@@ -86,7 +94,7 @@ class BarStore:
                 print(f"[data-quality] {symbol}: dropped {bad} invalid rows on read")
                 df = df[mask]
         if adjusted:
-            f = self.adj_factors(symbol)
+            f = self.combined_factors(symbol)
             if f.empty:
                 print(f"[data-quality] {symbol}: no adjustment factors stored — returning RAW prices "
                       "instead of pretending the series is adjusted")
@@ -126,6 +134,48 @@ class BarStore:
         if not r:
             return pd.Series(dtype="float64")
         return pd.Series([v for _, v in r], index=pd.to_datetime([d for d, _ in r]), name="factor")
+
+    # --- split factors (from NSE corporate-actions records) ---
+    def upsert_split_factors(self, symbol: str, factors: dict) -> int:
+        """factors: {date_str: ratio} — ratio applied on that date (0.5 for 1:2 split)."""
+        rows = [(symbol.upper(), d, float(v)) for d, v in factors.items()]
+        self.con.executemany("INSERT OR REPLACE INTO split_factors VALUES (?,?,?)", rows)
+        self.con.commit()
+        return len(rows)
+
+    def split_factors(self, symbol: str) -> pd.Series:
+        r = self.con.execute(
+            "SELECT d, ratio FROM split_factors WHERE symbol=? ORDER BY d", [symbol.upper()]).fetchall()
+        if not r:
+            return pd.Series(dtype="float64")
+        return pd.Series([v for _, v in r], index=pd.to_datetime([d for d, _ in r]), name="ratio")
+
+    def combined_factors(self, symbol: str) -> pd.Series:
+        """yfinance dividend factors × NSE split factors, forward-filled and normalised.
+
+        A symbol listed after 2015 has no yf factor before listing; a symbol with
+        no splits has no sf factor. Missing = 1.0 (no adjustment). Split factors
+        are stored per split date and cumulatively compounded so multiple splits
+        stack correctly (each split multiplies the running factor).
+        """
+        yf = self.adj_factors(symbol)
+        sf = self.split_factors(symbol)
+        if yf.empty and sf.empty:
+            return pd.Series(dtype="float64")
+        if yf.empty:
+            # only split factors: 1.0 on non-split dates, ratio on split dates
+            sf_daily = pd.Series(1.0, index=sf.index)
+            sf_daily.loc[sf.index] = sf.values
+            return sf_daily.cumprod()
+        if sf.empty:
+            return yf
+        all_dates = yf.index.union(sf.index)
+        yf_f = yf.reindex(all_dates).ffill().fillna(1.0)
+        # split factors: 1.0 on non-split dates, stored ratio on split dates
+        sf_daily = pd.Series(1.0, index=all_dates)
+        sf_daily.loc[sf.index] = sf.values
+        sf_cum = sf_daily.cumprod()
+        return yf_f * sf_cum
 
     def close(self):
         self.con.close()

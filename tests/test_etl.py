@@ -177,7 +177,7 @@ def test_stale_tail_refetches_even_when_deep(tmp_path):
     assert prov.calls == 1
 
 
-def test_fresh_but_shallow_series_still_fetches(tmp_path):
+def test_fresh_but_shallow_series_still_fetches(tmp_path, capsys):
     """The trap this guard exists for: a fresh-tailed series with barely any
     history is NOT done — declaring it skipped would quietly fake a long
     backtest. (Round-5 correction: "shallow" means <60 bars, not "starts after
@@ -188,9 +188,8 @@ def test_fresh_but_shallow_series_still_fetches(tmp_path):
     seed(store, "SHALLOW", "2026-10-05", str(pd.Timestamp.today().date()))  # ~26 bars
     store.close()
     _, prov = run(tmp_path, ["SHALLOW"], skip_fresh=True)
-    assert prov.calls == 1
-
-
+    assert prov.calls == 1                       # shallow + not-deep → refetch
+    assert "skipped" not in capsys.readouterr().out
 def test_new_listing_with_real_tail_is_skipped(tmp_path, capsys):
     """Round-5 live finding: ~193/499 symbols listed after 2015 failed the old
     both-prongs rule EVERY night, so run_once blew past 2 minutes re-fetching

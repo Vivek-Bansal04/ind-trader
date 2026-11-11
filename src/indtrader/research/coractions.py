@@ -40,6 +40,54 @@ CA_KEY_CANDS = {
 }
 
 
+def _split_ratio(subject: str) -> float | None:
+    """Guess split/bonus ratio from subject text.
+
+    Returns the STORED FACTOR (1 / price_multiplier), for forward-fill +
+    cumulative product in combined_factors():
+      - 1:2 split -> 2.0 (price halves → stored factor 2.0)
+      - Bonus 1:1 -> 2.0 (shares double → stored factor 2.0)
+      - Face value 2→1 -> 2.0 (shares double → stored factor 2.0)
+      - dividend -> None
+    """
+    s = subject.lower()
+    import re
+
+    is_bonus = "bonus" in s
+    is_split_or_fv = bool(re.search(r'\b(split|sub\.?div|face\s*val|fv)\b', s))
+
+    if not (is_bonus or is_split_or_fv):
+        return None
+
+    # Split/bonus ratio: "Bonus 1:1", "Stock Split 2:1", "1:2"
+    m = re.search(r'(\d+)\s*[:]\s*(\d+)', s)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        if is_bonus:
+            # Bonus X:Y: for every X shares, get Y new → total X+Y → price × X/(X+Y)
+            # stored factor = (X+Y)/X  (even when X==Y, shares double)
+            return round((a + b) / a, 6)
+        else:
+            # Split X:Y: a old shares become b new → price × a/b
+            # stored factor = b/a  (skip 1:1 → no change)
+            if a == b:
+                return None
+            return round(b / a, 6)
+
+    # Face-value change: "From Rs 2 To Rs 1", "From Rs.10/- To Rs.2/-"
+    if re.search(r'\b(fv|face\s*val|face value|sub\.?div|split)\b', s):
+        m = re.search(r'(\d+)\D{0,50}?\bto\b\D{0,50}?(\d+)', s)
+        if m:
+            a, b = int(m.group(1)), int(m.group(2))
+            if a == b:
+                return None
+            # Face value A→B: shares scale by A/B, price × B/A
+            # stored factor = A/B
+            return round(a / b, 6)
+
+    return None
+
+
 def ensure(store) -> None:
     store.con.executescript(SCHEMA)
 
@@ -78,6 +126,28 @@ def payload_shape(payload) -> str:
             return f"list: {len(payload)} rows, keys={sorted(payload[0])[:12]}"
         return f"list: {len(payload)} entries of {type(payload[0]).__name__}"
     return f"{type(payload).__name__}"
+
+
+def upsert_corporate_actions(store, symbol: str, events: list[dict]) -> int:
+    """Store parsed corporate-action events in the normalized table."""
+    store.con.executescript(SCHEMA)
+    rows = [(symbol.upper(), e["date"], e["kind"], e.get("ratio")) for e in events
+            if e.get("date") and e.get("kind")]
+    store.con.executemany(
+        "INSERT OR REPLACE INTO corporate_actions VALUES (?,?,?,?)", rows)
+    store.con.commit()
+    return len(rows)
+
+
+def build_split_factors(store, symbol: str, events: list[dict]) -> int:
+    """Build split_factors from parsed events that have a ratio (splits/bonuses)."""
+    store.con.executescript(SCHEMA)
+    split_factors = {}
+    for e in events:
+        ratio = _split_ratio(e["kind"])
+        if ratio is not None:
+            split_factors[e["date"]] = ratio
+    return store.upsert_split_factors(symbol, split_factors)
 
 
 def parse_events(symbol: str, payload) -> list[dict]:
@@ -134,7 +204,12 @@ def try_fetch(store, symbol: str, client=None) -> dict:
     forms = ((sym,), (sym, "cm"), (sym, "F&O"), ())
     probed, stored_any = [], False
     for m in cands:
-        for args in forms:
+        # actions() needs option_type="equities" first positional arg
+        if m == "actions":
+            arg_forms = [("equities",)]
+        else:
+            arg_forms = [(sym,), (sym, "cm"), (sym, "F&O"), ()]
+        for args in arg_forms:
             try:
                 data = getattr(client, m)(*args)
             except TypeError:
@@ -146,8 +221,10 @@ def try_fetch(store, symbol: str, client=None) -> dict:
             note = shape
             try:
                 events = parse_events(sym, data)
-                n_split = sum(1 for e in events if is_split_kind(e["kind"]))
-                note += f" -> PARSED {len(events)} events ({n_split} split/bonus)"
+                stored_events = upsert_corporate_actions(store, sym, events)
+                stored_factors = build_split_factors(store, sym, events)
+                note += (f" -> PARSED {len(events)} events; "
+                         f"{stored_events} stored, {stored_factors} split factors")
             except (KeyError, ValueError):
                 pass  # unconfirmed shape: the shape report IS the deliverable
             probed.append(f"{m}{args}: {note}")
@@ -161,3 +238,4 @@ def try_fetch(store, symbol: str, client=None) -> dict:
                          "paste this inventory, it decides the next move"}
     return {"ok": True, "stored_any": True, "probed": probed,
             "next": "coractions " + sym + " --from-raw  (replay parser over stored payloads)"}
+
