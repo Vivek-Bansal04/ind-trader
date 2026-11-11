@@ -4,11 +4,12 @@ Quarterly ownership per symbol, stored when seen; the value is the DELTA: promot
 stake down > 2% QoQ, notable FII exit, pledge increase — the three changes that
 actually precede trouble in Indian delivery names.
 
-Data honesty: the live NSE payload shape has NOT been inspected (office network),
-so `fetch` here is probe-only: it calls the library method and STORES THE RAW JSON
-plus prints the row keys — it never guesses a parser. Normalized rows get recorded
-either from a shape-confirmed parser later, or by hand from the exchange filing
-(`record`). Unknown shape stays unknown; it never becomes zeros.
+Data honesty: the shape was confirmed LIVE on 2026-11-11 (round-4 full key dump):
+quarterly PATTERN rows with date / pr_and_prgrp / public_val — parsed by
+`parse_pattern_rows`. FII/DII/pledge are NOT in that payload, so the live path
+leaves them NULL (deltas skip NULLs); those columns can still be filled by hand
+from the exchange filing (`record`). Unknown shape stays unknown; it never
+becomes zeros.
 """
 from __future__ import annotations
 
@@ -98,10 +99,72 @@ def holding_alerts(store, symbols: list[str]) -> list[str]:
     return msgs
 
 
+# ---- confirmed-shape parser (round-4 live payload, 2026-11-11) --------------------
+# The raw rows are the quarterly shareholding-PATTERN summary: one row per quarter
+# (23 rows = 23 quarters), NOT the detailed per-holder breakdown. Confirmed keys:
+#   date          quarter-end, "30-SEP-2026"
+#   pr_and_prgrp  promoter + promoter-group % ("50.44")
+#   public_val    public %  ("49.56")
+#   employeeTrusts, desc ("NEW_1"), symbol, isin
+# NOT present in this shape: FII / DII / pledge columns. Those stay unknown —
+# record() can still fill them by hand, and the live side leaves them NULL rather
+# than inventing zeros. If the payload shape changes, parse_rows refuses loudly.
+SH_PATTERN_KEYS = {"date": "quarter-end", "pr_and_prgrp": "promoter%",
+                   "public_val": "public%"}
+
+
+def quarter_label(d: str) -> str:
+    """"30-SEP-2026" -> "Q3FY27" (Indian FY starts April; quarter = calendar Q+1
+    across the FY boundary). Parse failures raise — never store a guessed label."""
+    from datetime import datetime
+
+    dt = datetime.strptime(d, "%d-%b-%Y")
+    fy = dt.year + 1 if dt.month >= 4 else dt.year
+    q = {3: 4, 6: 1, 9: 2, 12: 3}[dt.month]  # mar=Q4 of FY, jun=Q1 of next FY...
+    return f"Q{q}FY{str(fy)[2:]}"
+
+
+def parse_pattern_rows(symbol: str, payload) -> list[dict]:
+    """Confirmed-shape parse: -> [{period, promoter, public}]. Strict: every key in
+    SH_PATTERN_KEYS must exist on a row or the row raises. Rows for a different
+    symbol are dropped (the payload can carry peers)."""
+    sample = payload.get("data", payload) if isinstance(payload, dict) else payload
+    if not (isinstance(sample, list) and sample and isinstance(sample[0], dict)):
+        raise ValueError(f"payload is not a row list (got {type(sample).__name__})")
+    out = []
+    for r in sample:
+        missing = [k for k in SH_PATTERN_KEYS if k not in r]
+        if missing:
+            raise KeyError(f"row keys missing {missing}; confirmed shape has "
+                           f"{sorted(SH_PATTERN_KEYS)} — payload changed, refuse to guess")
+        if str(r.get("symbol", symbol)).upper() != symbol.upper():
+            continue
+        try:
+            promoter = float(r["pr_and_prgrp"])
+            public = float(r["public_val"])
+        except (TypeError, ValueError):
+            continue  # placeholder rows ("-", null) are not data — skip, don't zero
+        out.append({"period": quarter_label(r["date"]), "promoter": promoter,
+                    "public": public})
+    if not out:
+        raise ValueError(f"no usable rows for {symbol} among {len(sample)} rows")
+    return out
+
+
+def ingest_pattern_payload(store, symbol: str, payload) -> int:
+    """Parse + record the confirmed-shape rows; returns count stored."""
+    n = 0
+    for r in parse_pattern_rows(symbol, payload):
+        record(store, symbol, r["period"], promoter=r["promoter"], public=r["public"],
+               source="nse-shareholding")
+        n += 1
+    return n
+
+
 def try_fetch(store, symbol: str, client=None) -> dict:
-    """Probe-only live fetch: find a shareholding method, call it with cheap argument
-    forms, STORE THE RAW PAYLOAD. Parses and records nothing until the shape is known;
-    the printed keys are the answer the parser waits for."""
+    """Live fetch: call the library method, STORE THE RAW PAYLOAD, and — since
+    round 4 confirmed the shape — parse the pattern rows too. Unconfirmed shapes
+    still refuse: parse failure is reported, never swallowed into empty results."""
     if client is None:
         from indtrader.data.nseapi_provider import NseIndiaApiProvider
         client = NseIndiaApiProvider().client()
@@ -125,9 +188,14 @@ def try_fetch(store, symbol: str, client=None) -> dict:
             if isinstance(sample, list) and sample and isinstance(sample[0], dict):
                 keys = sorted(sample[0])
             store_raw(store, symbol, m, data)
+            stored = None
+            try:
+                stored = ingest_pattern_payload(store, symbol, data)
+                note = f"{stored} pattern rows recorded (confirmed round-4 shape); raw also stored"
+            except (KeyError, ValueError) as e:
+                note = f"raw stored; pattern parse REFUSED: {e}"
             return {"ok": True, "method": m, "stored_raw": True,
-                    "row_keys": keys,
-                    "note": "raw payload stored; parser waits for a CONFIRMED shape "
-                            "(no guessing — see module docstring)",
+                    "row_keys": keys, "pattern_rows_stored": stored,
+                    "note": note,
                     "last_err": None if not last_err else str(last_err)[:120]}
     return {"ok": False, "error": f"tried {cands}: {str(last_err)[:140]}"}

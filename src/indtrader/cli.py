@@ -201,19 +201,41 @@ def cmd_contract_test(args) -> int:
     syms = load_universe(args.file) if args.file else load_universe(None)
     store = BarStore()
     try:
-        from datetime import date
+        from datetime import date, timedelta
         session = args.date or max(
             (str(store.last_date(s))[:10] for s in set(syms) if store.last_date(s) is not None),
             default=None)
         if not session:
             print("store empty — run fetch-universe first", file=sys.stderr)
             return 1
+        # Round-4 live fact: the laptop's store now holds TODAY's patch-bar from
+        # yfinance, but NSE publishes bhavcopy only after settlement — so the newest
+        # store date has no bhav file and the raw NSEFileUnavailableError traceback
+        # read as a crash. Step back (weekends skipped) to the newest date that HAS
+        # a bhav file, printing each skip — the test should run, not die on the clock.
         n = NseIndiaApiProvider().client()
+        df, attempts = None, []
         try:
-            df = load_bhavcopy(n, date.fromisoformat(session))
+            d = date.fromisoformat(session)
+            for _ in range(7):
+                while d.weekday() >= 5:
+                    d -= timedelta(days=1)
+                attempts.append(d.isoformat())
+                try:
+                    df = load_bhavcopy(n, d)
+                    session = d.isoformat()
+                    break
+                except Exception as e:
+                    print(f"[contract-test] no bhav file for {d} ({type(e).__name__}) "
+                          f"— trying the previous session", file=sys.stderr)
+                    d -= timedelta(days=1)
         finally:
             if hasattr(n, "close"):
                 n.close()
+        if df is None:
+            print(f"no bhavcopy file for any of: {', '.join(attempts)} — NSE publish "
+                  f"lag or network problem, cannot contract-check", file=sys.stderr)
+            return 1
         res = contract_check(store, syms, bhav_close_map(df), session, tolerance=args.tolerance)
         print(json.dumps(res, indent=1, default=str))
         ok = res["checked"] >= args.min_checked and not res["mismatched"]
@@ -226,7 +248,7 @@ def cmd_contract_test(args) -> int:
 def cmd_holidays(args) -> int:
     """NSE trading-holiday calendar (CBM) for a year — cross-check vs the store's
     NIFTY bar dates: a holiday with a bar, or a trading day missing a bar, is ETL drift."""
-    from datetime import date as _date
+    from datetime import date as _date, timedelta
 
     from indtrader.data.contract import holidays_calendar
     from indtrader.data.nseapi_provider import NseIndiaApiProvider
@@ -254,17 +276,43 @@ def cmd_holidays(args) -> int:
         yr_days = {d for d in hol if d.startswith(str(year))}
         bad = sorted(d for d in yr_days if d in bar_days and _date.fromisoformat(d).weekday() < 5)
         print("holidays that HAVE index bars (real drift or special session):", bad or "none")
+        n_universe = store.con.execute(
+            "SELECT count(DISTINCT symbol) FROM candles WHERE tf='daily'").fetchone()[0]
         if bad:
-            # Discriminate: the index only prints when the market trades, so an
-            # index bar on a holiday date is either a half-day/special session or a
-            # wrong calendar row. A few stock bars on such a date = feed leakage.
+            # Classify by SHARE of the universe trading that day — absolute counts
+            # mislead (round 4: "494 symbols" was called leakage; with a 500-symbol
+            # universe that is market-wide -> the calendar row is the suspect).
             ph = ",".join("?" * len(bad))
             counts = dict(store.con.execute(
                 f"SELECT d, count(DISTINCT symbol) FROM candles WHERE d IN ({ph}) AND tf='daily' "
                 f"GROUP BY d", bad).fetchall())
             for d in bad:
-                print(f"  {d}: NIFTY bar present, {counts.get(d, 0)} symbols have bars "
-                      f"(a handful -> yfinance feed leakage; thousands -> calendar row wrong)")
+                c = counts.get(d, 0)
+                share = c / n_universe if n_universe else 0.0
+                if share >= 0.5:
+                    # Market-wide: the WHOLE day's series is suspect, not just the bar.
+                    # Off-by-one dates (UTC shift) leave a signature: the date's span
+                    # looks like a trading day AND the PRIOR trading day is missing.
+                    sp = store.con.execute(
+                        "SELECT count(DISTINCT close) FROM candles WHERE d=? AND tf='daily'",
+                        (d,)).fetchone()
+                    n_distinct_prices = sp[0] or 0
+                    prev = (_date.fromisoformat(d) - timedelta(days=1))
+                    while prev.weekday() >= 5:
+                        prev -= timedelta(days=1)
+                    prev_missing = prev.isoformat() not in bar_days
+                    print(f"  {d}: {c}/{n_universe} symbols ({share:.1%}) -> MARKET-WIDE: "
+                          f"calendar row suspect or the market actually traded")
+                    print(f"      span: {n_distinct_prices} distinct closes "
+                          f"(0 = flat/flagged rows; hundreds = real session), "
+                          f"prev trading day {prev} missing from index: {prev_missing} "
+                          f"(True True = off-by-one signature)")
+                elif share >= 0.05:
+                    print(f"  {d}: {c}/{n_universe} symbols ({share:.1%}) -> ambiguous, "
+                          f"run the span query before concluding")
+                else:
+                    print(f"  {d}: {c}/{n_universe} symbols ({share:.1%}) -> few symbols: "
+                          f"yfinance feed leakage (isolated bars on a closed day)")
         # also report holiday dates that have stock bars but NO index bar
         strays = sorted((d for d in yr_days
                          if d not in bar_days and _date.fromisoformat(d).weekday() < 5))

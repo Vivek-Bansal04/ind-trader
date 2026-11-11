@@ -201,13 +201,11 @@ def test_cli_contract_test_empty_store_refuses(tmp_path, monkeypatch, capsys):
     get_settings.cache_clear()
 
 
-# ---- holidays discriminator (round-3: 4 holidays WITH bars, cause unknown) --------
-
-def test_cli_holidays_discriminates_calendar_vs_leakage(tmp_path, monkeypatch, capsys):
-    """Round-3 printed dates-with-bars and stopped there. The upgraded command must
-    classify: an index bar on a holiday where only a HANDFUL of symbols traded is
-    feed leakage; thousands means the calendar row itself is wrong. Offline test =
-    fake calendar client + seeded store, exercising the real SQL branch."""
+def test_cli_contract_test_steps_back_over_unpublished_days(tmp_path, monkeypatch, capsys):
+    """Round-4 live crash: the store holds TODAY's yfinance patch-bar, but NSE
+    publishes bhavcopy only after settlement -> raw NSEFileUnavailableError on the
+    newest date. The command must step back to the newest date WITH a file, loudly,
+    and still run the check."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     from indtrader.config import get_settings
 
@@ -215,17 +213,72 @@ def test_cli_holidays_discriminates_calendar_vs_leakage(tmp_path, monkeypatch, c
     import indtrader.data.nseapi_provider as P
     from indtrader.data.store import BarStore
 
-    hol_date = "2026-02-19"
+    # store's newest bar = 2026-11-10 (Tue); bhav file exists only for 2026-11-09
     store = BarStore()
-    days = ("2026-02-18", hol_date)
-    ohlc = {"open": [100.0] * 2, "high": [101.0] * 2, "low": [99.0] * 2,
-            "close": [100.0] * 2, "volume": [1e6] * 2}
-    # NIFTY printed a bar on the holiday, plus 2 stocks -> leakage signal
-    for sym in ("NIFTY", "FAKECO1", "FAKECO2"):
-        store.upsert_candles(sym, "daily", pd.DataFrame(ohlc, index=pd.to_datetime(days)), "test")
+    for sym, (c9, c10) in (("RELIANCE", (1324.4, 1330.0)), ("HDFCBANK", (798.15, 800.0))):
+        df = pd.DataFrame({"open": [c9 - 10, c9], "high": [c9 + 10, c10 + 5],
+                           "low": [c9 - 15, c9 - 5], "close": [c9, c10],
+                           "volume": [1e6, 1e6]},
+                          index=pd.to_datetime(["2026-11-09", "2026-11-10"]))
+        store.upsert_candles(sym, "daily", df, "test")
     store.close()
 
-    fake_cal = {hol_date: "Test Holiday"}
+    uni = tmp_path / "universe.txt"
+    uni.write_text("RELIANCE\nHDFCBANK\n")
+    bhav = bhav_df([["09-Nov-2026", "I", "RELIANCE", "EQ", "EQI", 1324.4, 1310.0],
+                    ["09-Nov-2026", "I", "HDFCBANK", "EQ", "EQI", 798.15, 795.0]])
+
+    class Client:
+        def equity_bhavcopy(self, d):
+            if d.isoformat() != "2026-11-09":
+                raise RuntimeError("NSEFileUnavailableError: not published yet")
+            return bhav
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(P.NseIndiaApiProvider, "available", staticmethod(lambda: True))
+    monkeypatch.setattr(P.NseIndiaApiProvider, "client", lambda self: Client())
+
+    from indtrader.cli import main
+
+    rc = main(["contract-test", "--file", str(uni), "--min-checked", "2"])
+    out = capsys.readouterr()
+    assert rc == 0, out.out + out.err
+    assert '"session": "2026-11-09"' in out.out          # stepped back, then PASSED
+    assert "no bhav file for 2026-11-10" in out.err      # and SAID it stepped
+    get_settings.cache_clear()
+
+
+# ---- holidays discriminator (round-3: 4 holidays WITH bars, cause unknown) --------
+
+def test_cli_holidays_classifies_by_universe_share(tmp_path, monkeypatch, capsys):
+    """Round-4 fact: absolute counts mislead — "494 symbols" in a 500-symbol store
+    is market-wide, not leakage. The command must judge by SHARE: few % -> feed
+    leakage; half+ -> calendar row suspect (with the off-by-one span diagnostic)."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    from indtrader.config import get_settings
+
+    get_settings.cache_clear()
+    import indtrader.data.nseapi_provider as P
+    from indtrader.data.store import BarStore
+
+    leak_date, wide_date = "2026-02-19", "2026-03-19"
+    store = BarStore()
+    ohlc = {"open": [100.0] * 2, "high": [101.0] * 2, "low": [99.0] * 2,
+            "close": [100.0] * 2, "volume": [1e6] * 2}
+
+    def seed(sym, days):
+        frame = pd.DataFrame({k: v[:len(days)] for k, v in ohlc.items()},
+                             index=pd.to_datetime(days))
+        store.upsert_candles(sym, "daily", frame, "test")
+
+    seed("NIFTY", ["2026-02-18", leak_date])          # index bar on leak_date
+    seed("FAKECO1", ["2026-02-18", leak_date])        # + 1 stock -> 2 of 41 = ~5%
+    for i in range(40):                                # filler universe
+        seed(f"F{i:02d}", ["2026-02-18"])
+    store.close()
+
     monkeypatch.setattr(P.NseIndiaApiProvider, "available", staticmethod(lambda: True))
     monkeypatch.setattr(P.NseIndiaApiProvider, "client",
                         lambda self: type("C", (), {"holidays": lambda s: {"CBM": [
@@ -238,6 +291,5 @@ def test_cli_holidays_discriminates_calendar_vs_leakage(tmp_path, monkeypatch, c
     rc = main(["holidays", "--year", "2026"])
     out = capsys.readouterr().out
     assert rc == 0, out
-    assert hol_date in out
-    assert "NIFTY bar present, 3 symbols" in out  # the discriminator line, with count
+    assert "2/42" in out and "feed leakage" in out    # share-based verdict, named
     get_settings.cache_clear()
