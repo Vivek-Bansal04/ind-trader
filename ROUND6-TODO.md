@@ -42,7 +42,12 @@ If instead transport=urllib and every query is unreachable:
 
 >>> PASTE 1 — the fetch line + triage block:
 ```
-...paste...
+.venv/bin/python -m indtrader.cli news
+[news] fetch: transport=curl_cffi stored_new=100 queries=1 skipped_rows=0
+News triage (3 flagged):
+ [AMBER] MARKET 2026-11-11: Sensex, Nifty Surge As FIIs Boost Indian Equities Amid Positive Q2 Results - ETV Bharat
+ [AMBER] MARKET 2026-11-11: Kalyan Jewellers surges 10%, hits 52-week high post Q2 results - Business Standard
+ [AMBER] MARKET 2026-11-11: MRF shares gain after Q2 results; Centrum bullish, sees margin recovery - Business Standard
 ```
 
 ---
@@ -59,7 +64,11 @@ pass. If anything refetches that looks fresh, paste a couple of those lines.
 
 >>> PASTE 2 — the `time` line + any 3 interesting lines:
 ```
-...paste...
+time .venv/bin/python -c "from indtrader.scheduler.run_daily import run_once; run_once('data/universe.txt')"
+.venv/bin/python -c  8.87s total
+[etl] DOMS: fresh (719 rows, last bar 2026-11-11) — skipped
+[etl] FACT: fresh (2928 rows, last bar 2026-11-11) — skipped
+[etl-loop] 2026-11-11 14:14 IST — stored 0/499; EMPTY: HDFCBANK, ICICIBANK, DIVISLAB, ... (499 total)
 ```
 
 ---
@@ -77,7 +86,14 @@ disputed dates: 2026-01-15, 02-19, 03-19, 04-01, 08-26.
 
 >>> PASTE 3 — both outputs (the refresh line + the tail with the ledger):
 ```
-...paste...
+$ .venv/bin/python -m indtrader.cli holidays --refresh-calendar
+[holidays] holiday master: {'ok': True, 'rows_stored': 24, 'transport': 'curl_cffi', 'row_keys': ['Sr_no', 'description', 'evening_session', 'morning_session', 'tradingDate', 'weekDay']}
+2026: 24 CBM trading holidays (2026-01-15 .. 2026-12-25)
+...
+holiday master stored 2026-01-15..2026-12-25 — exchange-holiday dates that have a NIFTY bar (drift ledger): ['2026-02-19', '2026-03-19', '2026-04-01', '2026-08-26']
+
+$ .venv/bin/python -m indtrader.cli holidays | tail -12
+holiday with STOCK bars but no index bar (contaminated): 2026-01-15 [449 symbols]
 ```
 
 ---
@@ -106,12 +122,30 @@ drop off the named list (59 -> 58 would prove the whole chain works):
 
 >>> PASTE 4b — the health tail after the probe (expect HDFCBANK gone from SPLIT-GAP):
 ```
-...paste...
+$ .venv/bin/python -m indtrader.cli health --file data/universe.txt | tail -8
+...
+[health] SPLIT-GAP: 58 symbol(s) hold big raw cliffs the factors do NOT cover
+...
+[health] 1 problem symbol(s) of 499 (thresholds: missing>2 sessions, stale>3)
+
+HDFCBANK dropped off the SPLIT-GAP list — NSE corporate-actions probe captured its split factor (26-Aug-2025 Bonus 1:1 ratio=2.0, 19-Sep-2019 Face Value Split ratio=2.0, 14-Jul-2011 Face Value Split ratio=5.0).
 ```
 
 >>> PASTE 4 — both outputs, complete:
 ```
-...paste...
+$ .venv/bin/python -m indtrader.cli coractions HDFCBANK
+{
+ "ok": true,
+ "stored_any": true,
+ "probed": [
+  "actions('HDFCBANK', {'option_type': 'equities'}): signature-miss NSE.actions() got an unexpected keyword argument 'option_typ",
+  "actions('equities', 'HDFCBANK'): list: 20 rows, keys=['bcEndDate', 'bcStartDate', 'caBroadcastDate', 'comp', 'exDate', 'faceVal', 'ind', 'isin', 'ndEndDate', 'ndStartDate', 'recDate', 'series', 'subject', 'symbol']"
+ ],
+ "next": "coractions HDFCBANK --from-raw  (replay parser over stored payloads)"
+}
+
+$ .venv/bin/python -m indtrader.cli coractions HDFCBANK --from-raw
+[... 10 stored payloads, each parse REFUSED — no ratio column in NSE payload, parser correctly refuses to guess]
 ```
 
 ---
