@@ -9,3 +9,5 @@ data/*
 .ruff_cache/
 dist/
 *.egg-info/
+
+.idea/
