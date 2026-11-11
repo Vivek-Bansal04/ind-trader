@@ -16,7 +16,11 @@ git pull
 
 ## 1. Finish the backfill (the one long step — start it and let it run)
 
-Round 2 got ~33/500 symbols. Idempotent — finished symbols are skipped cheaply.
+Round 2 got ~33/500 symbols. Honest timing: re-runs are SAFE (upserts, no
+duplicates) but not fast — each symbol re-downloads its history from 2015
+(~15 s each, so the full file is ~2 h end to end). Let it run to completion once;
+if you must stop, paste what printed and note roughly how far it got — the next
+run continues where the data is missing, it just re-checks from the start.
 
 ```bash
 .venv/bin/python -m indtrader.cli fetch-universe --file data/universe.txt
@@ -125,15 +129,16 @@ EOF
 
 ```bash
 .venv/bin/python -m indtrader.cli scan --file data/universe.txt --top 5
-.venv/bin/python -m indtrader.cli plan RELIANCE BUY --qty 10 --entry 1400 --stop 1300 --target 1600 --reason "test plan for round3 smoke" --setup manual
+ID=$(.venv/bin/python -m indtrader.cli plan RELIANCE BUY --qty 10 --entry 1400 --stop 1300 --target 1600 --reason "test plan for round3 smoke" --setup manual | sed -E 's/plan #([0-9]+).*/\1/')
+echo "smoke plan id: $ID"
 .venv/bin/python -m indtrader.cli plans
-.venv/bin/python -m indtrader.cli plan-mark 1 cancelled
+.venv/bin/python -m indtrader.cli plan-mark "$ID" cancelled
 ```
 
 NOTE the scan one: if the ETL is current it should print the shortlist; if the
 store is days old it should REFUSE with DEAD-MAN — both outcomes are correct answers.
-(If plan ids collide with your own, the `plan-mark` may name a different id — paste
-whatever it says.)
+(`$ID` picks up the id the `plan` command actually printed, so it can't collide
+with plans you already have.)
 
 >>> PASTE 6 — all four outputs:
 ```
