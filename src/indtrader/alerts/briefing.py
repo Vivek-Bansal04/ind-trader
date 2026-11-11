@@ -83,7 +83,26 @@ def build_briefing(settings: Settings | None = None) -> str:
         table = scan(closes, bench=(idx["close"] if not idx.empty else None),
                      regime=regime, top=TOP, extras=extras,
                      volumes=volumes, bars=bars) if closes else None
-        return format_briefing(str(date.today()), regime, table, missing=missing)
+        text = format_briefing(str(date.today()), regime, table, missing=missing)
+        # News line: STORED triage only (fetch is the loop's job); empty when
+        # nothing keyword-flagged — same vocabulary as the ann section, 3d window.
+        try:
+            from indtrader.data import news
+            from indtrader.execution.planlog import PlanLog
+            from indtrader.portfolio.valuation import held_quantities
+
+            log = PlanLog()
+            try:
+                held = sorted(held_quantities(log.fills()))
+            finally:
+                log.close()
+            flagged = news.triaged_recent(store, held + ["MARKET"], days=3)
+            if flagged:
+                text += "\nNews flagged: " + "; ".join(
+                    f"[{m.severity}] {m.symbol} {m.title[:70]}" for m in flagged[:5])
+        except Exception as e:
+            text += f"\nNews section unavailable: {type(e).__name__}"
+        return text
     finally:
         store.close()
 

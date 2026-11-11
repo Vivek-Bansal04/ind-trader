@@ -241,6 +241,25 @@ def _ann(argv, s):
         store.close()
 
 
+@command("news")
+def _news(argv, s):
+    from indtrader.data.news import format_alert, triaged_recent
+    from indtrader.data.store import BarStore
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio.valuation import held_quantities
+
+    log = PlanLog()
+    try:
+        held = sorted(held_quantities(log.fills()))
+    finally:
+        log.close()
+    store = BarStore()
+    try:
+        return format_alert(triaged_recent(store, held + ["MARKET"], days=7))
+    finally:
+        store.close()
+
+
 @command("fill")
 def _fill(argv, s):
     """RECORDS a fill the human already executed at the broker. Writing this journal

@@ -1167,6 +1167,37 @@ def cmd_ann(args) -> int:
         store.close()
 
 
+def cmd_news(args) -> int:
+    """External-news triage for holdings + a MARKET macro query. The judgment is
+    the SAME keyword vocabulary as announcements (data.announce) — news adds a
+    feed, not a second opinion. Feed trouble is reported as feed trouble; a dead
+    feed is never rendered as a quiet day."""
+    from indtrader.data import news
+    from indtrader.data.store import BarStore
+
+    store = BarStore()
+    try:
+        held = _held_symbols()
+        fetch_ok = True
+        fetch_syms = [s.upper() for s in (args.symbols or []) if s.upper() != "MARKET"]
+        if not args.no_fetch:
+            # fetch symbols named on the command line; none named -> the book's holdings
+            res = news.fetch_news(fetch_syms or held, store)
+            print(f"[news] fetch: stored_new={res['stored_new']} queries={res['queries']} "
+                  f"skipped_rows={res['skipped_rows']}")
+            for bad in res["unreachable"] + res["failed"]:
+                print(f"[news] feed problem: {bad}")
+            if not res["ok"]:
+                print("[news] EVERY feed query failed — results below are UNKNOWN, not quiet",
+                      file=sys.stderr)
+                fetch_ok = False
+        syms = [s.upper() for s in (args.symbols or (held + ["MARKET"]))]
+        print(news.format_alert(news.triaged_recent(store, syms, days=args.days)))
+        return 0 if fetch_ok else 1
+    finally:
+        store.close()
+
+
 def cmd_events(args) -> int:
     """Results calendar: store/surface dates and the plan's size rule per symbol."""
     from indtrader.data.store import BarStore
@@ -1540,6 +1571,13 @@ def main(argv=None) -> int:
     s.add_argument("--no-fetch", action="store_true", help="triage stored rows only")
     s.add_argument("--telegram", action="store_true", help="also send the alert when configured")
     s.set_defaults(fn=cmd_ann)
+    s = sub.add_parser("news",
+                       help="external news (Google News RSS) triaged with the SAME ann keywords; holdings + MARKET")
+    s.add_argument("symbols", nargs="*", help="override symbols; default = holdings + MARKET")
+    s.add_argument("--days", type=int, default=7)
+    s.add_argument("--no-fetch", dest="no_fetch", action="store_true",
+                   help="offline: triage stored rows only, no network")
+    s.set_defaults(fn=cmd_news)
     s = sub.add_parser("events", help="results calendar + the no-entry/half-size plan rule")
     s.add_argument("symbol", nargs="?")
     s.add_argument("--qty", type=int, default=0, help="proposed qty to run through the size gate")

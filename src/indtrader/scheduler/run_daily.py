@@ -28,6 +28,27 @@ def run_once(universe_file: str | None = None) -> dict[str, int]:
             print(f"[etl-loop] feeds: {feeds_res['status']} (kept last-known)")
     except Exception as e:
         print(f"[etl-loop] feeds failed (non-fatal): {e}")
+    # external news for held names (Google RSS; a dead feed prints, never fakes quiet)
+    try:
+        from indtrader.data import news
+        from indtrader.data.store import BarStore
+        from indtrader.execution.planlog import PlanLog
+        from indtrader.portfolio.valuation import held_quantities
+
+        log = PlanLog()
+        try:
+            held = sorted(held_quantities(log.fills()))
+        finally:
+            log.close()
+        store = BarStore()
+        try:
+            res = news.fetch_news(held, store)
+        finally:
+            store.close()
+        print(f"[etl-loop] news: {res['stored_new']} new rows / {res['queries']} queries"
+              + ("" if res["ok"] else " — ALL FEEDS DOWN, news view is UNKNOWN not quiet"))
+    except Exception as e:
+        print(f"[etl-loop] news failed (non-fatal): {e}")
     # evening briefing to Telegram when configured (print-only otherwise)
     try:
         from indtrader.alerts.briefing import maybe_notify
