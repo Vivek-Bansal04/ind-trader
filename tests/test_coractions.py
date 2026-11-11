@@ -64,6 +64,47 @@ def test_is_split_kind_never_guesses():
     assert not ca.is_split_kind("Board meeting")      # ambiguous -> never a factor
 
 
+# ---- the ROUND-6 CONFIRMED payload shape (PASTE 4 key dump) -----------------------------
+
+def NSE_ROW(**kw):  # keys exactly as probed live on the laptop, 2026-11-11
+    row = {"bcEndDate": "28-Aug-2025", "bcStartDate": "26-Aug-2025",
+           "caBroadcastDate": "20-Aug-2025", "comp": "HDFC Bank Ltd",
+           "exDate": "26-Aug-2025", "faceVal": 2.5, "ind": "BANK",
+           "isin": "INE040A01034", "ndEndDate": "26-Aug-2025", "ndStartDate": "26-Aug-2025",
+           "recDate": "26-Aug-2025", "series": "EQ", "subject": "Bonus",
+           "symbol": "HDFCBANK"}
+    row.update(kw)
+    return row
+
+
+def test_confirmed_shape_parses_and_ratioless_events_stay_unresolved(store):
+    payload = {"data": [NSE_ROW(),
+                        NSE_ROW(exDate="14-Jul-2011", subject="Split of shares from Rs 10 to Rs 2",
+                                faceVal=2.0)]}
+    events = ca.parse_events("HDFCBANK", payload)
+    assert len(events) == 2
+    assert events[0]["date"] == "26-Aug-2025" and events[0]["faceVal"] == 2.5
+    n, unresolved = ca.build_split_factors(store, "HDFCBANK", events)
+    # BOTH subjects LOOK like splits/bonuses but state no usable numbers:
+    # factors NOT stored, both NAMED. The row's faceVal alone cannot give a
+    # ratio — the payload never says the face value BEFORE the action — so a
+    # ratio derived from it would be a guess, and guesses are what this repo
+    # refuses. health keeps HDFCBANK on the split-gap list until real ratio
+    # text (or a human --set) lands.
+    assert n == 1 and unresolved == ["26-Aug-2025: Bonus"]
+    # "from Rs 10 to Rs 2" states numbers -> price multiplier 0.2, ISO-normalised
+    sf = store.split_factors("HDFCBANK")
+    assert str(sf.index[0].date()) == "2011-07-14" and float(sf.iloc[0]) == 0.2
+    note = ca.record_parsed(store, "HDFCBANK", events)
+    assert "UNRESOLVED 1" in note                       # and the operator SEES it
+
+
+def test_unparseable_date_raises_not_skips():
+    with pytest.raises(ValueError, match="unparseable"):
+        ca.parse_iso_day("whenever")
+    assert ca.parse_iso_day("26-Aug-2025").isoformat() == "2025-08-26"
+
+
 def test_cli_coractions_from_raw_offline(tmp_path, monkeypatch, capsys):
     """--from-raw works with NO nse lib: it replays the parser over stored rows."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path))

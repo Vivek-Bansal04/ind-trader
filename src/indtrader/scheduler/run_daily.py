@@ -14,11 +14,19 @@ from indtrader.scheduler.etl import run_etl
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
-def run_once(universe_file: str | None = None) -> dict[str, int]:
+def run_once(universe_file: str | None = None) -> dict[str, int | None]:
     res = run_etl(universe_file=Path(universe_file) if universe_file else None)
+    # None = fresh-skipped, 0 = fetched but no data, >0 = rows stored. Collapsing
+    # the two was the round-6 report bug: a healthy all-fresh evening printed
+    # "EMPTY: <all 499 symbols>", which is exactly the false alarm that trains
+    # an operator to ignore the loop.
+    stored = sum(1 for n in res.values() if n)
+    skipped = sum(1 for n in res.values() if n is None)
     empty = [s for s, n in res.items() if n == 0]
-    print(f"[etl-loop] {datetime.now(IST):%Y-%m-%d %H:%M} IST — stored {len(res) - len(empty)}/{len(res)}"
-          + (f"; EMPTY: {', '.join(empty)}" if empty else ""))
+    print(f"[etl-loop] {datetime.now(IST):%Y-%m-%d %H:%M} IST — stored {stored}/{len(res)}"
+          f", fresh-skipped {skipped}"
+          + (f"; EMPTY: {', '.join(empty[:12])}{' ...' if len(empty) > 12 else ''}"
+             if empty else ""))
     # best-effort evidence feeds after candles (silent no-op without NseIndiaApi)
     try:
         from indtrader.data.feeds import fetch_feeds

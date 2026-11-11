@@ -142,6 +142,18 @@ def seed(store, sym, first, last):
                                       index=pd.DatetimeIndex(days)), "test")
 
 
+def last_settled_session() -> str:
+    """Latest weekday strictly before today — 'settled' for the freshness rule
+    at ANY wall-clock hour (weekends make the IST clock irrelevant: a Fri bar
+    is settled whether it's 14:00 or 17:00)."""
+    from datetime import date, timedelta
+
+    d = date.today() - timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d.isoformat()
+
+
 def run(tmp_path, symbols, skip_fresh, fresh_bdays=3):
     from indtrader.data.store import BarStore
     from indtrader.scheduler.etl import fetch_universe
@@ -159,12 +171,12 @@ def test_deep_and_fresh_symbol_is_skipped(tmp_path, capsys):
     from indtrader.data.store import BarStore
 
     store = BarStore(tmp_path / "b.sqlite")
-    seed(store, "DONE", "2015-01-05", str(pd.Timestamp.today().date()))
+    seed(store, "DONE", "2015-01-05", last_settled_session())
     store.close()
     res, prov = run(tmp_path, ["DONE"], skip_fresh=True)
     assert prov.calls == 0                       # provider never touched
     assert "skipped" in capsys.readouterr().out  # and it SAID so
-    assert res["DONE"] == 0
+    assert res["DONE"] is None                   # None = skipped-fresh, distinct from 0
 
 
 def test_stale_tail_refetches_even_when_deep(tmp_path):
@@ -185,7 +197,7 @@ def test_fresh_but_shallow_series_still_fetches(tmp_path, capsys):
     from indtrader.data.store import BarStore
 
     store = BarStore(tmp_path / "b.sqlite")
-    seed(store, "SHALLOW", "2026-10-05", str(pd.Timestamp.today().date()))  # ~26 bars
+    seed(store, "SHALLOW", "2026-10-05", last_settled_session())  # ~26 bars
     store.close()
     _, prov = run(tmp_path, ["SHALLOW"], skip_fresh=True)
     assert prov.calls == 1                       # shallow + not-deep → refetch
@@ -200,7 +212,7 @@ def test_new_listing_with_real_tail_is_skipped(tmp_path, capsys):
     from indtrader.data.store import BarStore
 
     store = BarStore(tmp_path / "b.sqlite")
-    seed(store, "NEWLIST", "2024-06-03", str(pd.Timestamp.today().date()))  # 600+ bars
+    seed(store, "NEWLIST", "2024-06-03", last_settled_session())  # 600+ bars
     store.close()
     _, prov = run(tmp_path, ["NEWLIST"], skip_fresh=True)
     assert prov.calls == 0
@@ -211,7 +223,7 @@ def test_skip_fresh_default_off_explicit_fetch_always_fetches(tmp_path):
     from indtrader.data.store import BarStore
 
     store = BarStore(tmp_path / "b.sqlite")
-    seed(store, "DONE", "2015-01-05", str(pd.Timestamp.today().date()))
+    seed(store, "DONE", "2015-01-05", last_settled_session())
     store.close()
     _, prov = run(tmp_path, ["DONE"], skip_fresh=False)
     assert prov.calls == 1

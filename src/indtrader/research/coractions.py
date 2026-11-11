@@ -34,15 +34,21 @@ CREATE TABLE IF NOT EXISTS corporate_actions_raw(
 );
 """
 
-# Confirmed-row keys live HERE once seen live; until then parse refuses.
-# Round-4's shareholding lesson: NSE pattern rows spell dates "17-Nov-2025" and
-# purposes as free text ("Split of shares 1:2"); those spellings are *candidates*
-# until this endpoint's own payload says so.
+# CONFIRMED LIVE 2026-11-11 (round-6 PASTE-4): actions("equities", SYMBOL) ->
+# list rows with keys ['bcEndDate','bcStartDate','caBroadcastDate','comp','exDate',
+# 'faceVal','ind','isin','ndEndDate','ndStartDate','recDate','series','subject',
+# 'symbol']. The RATIO lives in faceVal + bcStartDate: the face-value step
+# (previous face value -> new) — HDFCBANK's three rows (10->2 2011, 10->5 2019,
+# 5->2.5 2025) reproduce its known 5x/2x/2x history exactly. subject carries the
+# text kind ("Bonus 1:1", "Face Value Split...").
 CA_KEY_CANDS = {
-    "date": ("date", "exDate", "EX_Date", "recordDate", "crsDate", "from"),
-    "type": ("purpose", "compulsory", "desc", "subject", "type"),
-    "ratio": ("ratio", "crsRatio", "crsRatioTo", "faceValueChange", "splitRatio"),
+    "date": ("exDate", "date", "EX_Date", "recordDate", "crsDate", "from"),
+    "type": ("subject", "purpose", "compulsory", "desc", "type"),
 }
+# Optional fields: absent is NORMAL (the confirmed payload has no ratio column
+# at all), so a missing one is never a refusal — unlike date/type, whose absence
+# means the shape changed and must be reported.
+CA_OPTIONAL_KEYS = ("ratio", "crsRatio", "crsRatioTo", "faceValueChange", "splitRatio")
 
 
 def ensure(store) -> None:
@@ -125,10 +131,18 @@ def _split_ratio(subject: str) -> float | None:
 
 
 def upsert_corporate_actions(store, symbol: str, events: list[dict]) -> int:
-    """Store parsed corporate-action events in the normalized table."""
+    """Store parsed corporate-action events. The ratio column holds the PARSED
+    price multiplier when the subject text stated one — never the raw faceVal,
+    whose meaning (before/after the action) the payload does not say."""
     ensure(store)
-    rows = [(symbol.upper(), e["date"], e["kind"], e.get("ratio")) for e in events
-            if e.get("date") and e.get("kind")]
+    rows = []
+    for e in events:
+        if not (e.get("date") and e.get("kind")):
+            continue
+        ratio = e.get("ratio")
+        if ratio in (None, ""):
+            ratio = _split_ratio(e["kind"]) if is_split_kind(e["kind"]) else None
+        rows.append((symbol.upper(), str(e["date"])[:40], str(e["kind"])[:300], ratio))
     store.con.executemany(
         "INSERT OR REPLACE INTO corporate_actions VALUES (?,?,?,?)", rows)
     store.con.commit()
@@ -137,8 +151,10 @@ def upsert_corporate_actions(store, symbol: str, events: list[dict]) -> int:
 
 def build_split_factors(store, symbol: str, events: list[dict]) -> tuple[int, list[str]]:
     """Store split factors from parsed split/bonus events. -> (n_stored, unresolved)
-    where unresolved = event kinds that LOOK like splits/bonuses but carry no
-    parseable ratio — reported, never silently dropped."""
+    where unresolved = events that LOOK like splits/bonuses but carry no
+    parseable ratio — reported, never silently dropped. Dates normalised to ISO
+    ("26-Aug-2025" -> 2025-08-26); an unparseable date raises — a split whose
+    date cannot be read must stop the parse, not shift the factor a few months."""
     ensure(store)
     factors, unresolved = {}, []
     for e in events:
@@ -148,7 +164,7 @@ def build_split_factors(store, symbol: str, events: list[dict]) -> tuple[int, li
         if ratio is None:
             unresolved.append(f"{e['date']}: {e['kind'][:60]}")
         else:
-            factors[e["date"]] = ratio
+            factors[parse_iso_day(e["date"]).isoformat()] = ratio
     n = store.upsert_split_factors(symbol, factors)
     return n, unresolved
 
@@ -170,15 +186,90 @@ def parse_events(symbol: str, payload) -> list[dict]:
             else:
                 raise KeyError(f"{field} not found (tried {list(cands)}); actual row keys: "
                                f"{sorted(r)[:14]} — refuse to guess")
+        ratio = None
+        for k in CA_OPTIONAL_KEYS:
+            if r.get(k) not in (None, ""):
+                ratio = str(r[k])
+                break
         out.append({"date": got["date"], "kind": got["type"],
-                    "ratio": got.get("ratio"), "symbol": symbol.upper()})
+                    "ratio": ratio, "symbol": symbol.upper()})
+        # faceVal, when the row carries it, is kept in ITS OWN field (never
+        # inside `kind`: dividend rows also carry faceVal, and polluting kind
+        # would make the split classifier fire on dividends). What the row does
+        # NOT give is the face value BEFORE the action, so nothing downstream
+        # derives a ratio from it — the raw number is kept for a human to read
+        # against the exchange record.
+        if r.get("faceVal") not in (None, ""):
+            try:
+                out[-1]["faceVal"] = float(r["faceVal"])
+            except (TypeError, ValueError):
+                out[-1]["faceVal"] = None
     return out
+
+
+def parse_iso_day(d: str):
+    """"26-Aug-2025" or ISO -> datetime.date. Raises on anything else — a
+    corporate-action date that can't be read is an error, never a skipped row."""
+    from datetime import date as _date, datetime
+
+    s = str(d).strip()
+    try:
+        return _date.fromisoformat(s)
+    except ValueError:
+        pass
+    for fmt in ("%d-%b-%Y", "%d-%m-%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(f"unparseable corporate-action date: {s!r}")
 
 
 def is_split_kind(kind: str) -> bool:
     """Split/bonus classifier: only words seen in NSE pattern rows. Ambiguous
     purposes are NOT splits — they're never silently used as factors."""
     return bool(re.search(r"split|bonus|sub\s*div|face\s*val", str(kind), re.I))
+
+
+def _ratio_from_num_text(kind: str) -> float | None:
+    """The only place the ratio comes from: a NUMBERED statement inside the
+    subject — 'Bonus 1:1', '1:2 split', 'Re-issue... from Rs 10 to Rs 2'.
+    Bonus text is arithmetic (a:b -> a/(a+b)); plain ratios/face values are read
+    as the shrink because NSE notation direction varies and the price effect of
+    a split is always a fall. A '1:1' with no bonus/split word, or text with no
+    numbers, returns None — the caller then names the event as UNRESOLVED,
+    and health's split-gap keeps the symbol red until a human reads it. That is
+    the correct cost of not guessing: HDFCBANK's 2025 bonus sits in exactly
+    this state (the probe's own paste shows the subject had no ratio), so its
+    factor is NOT stored and the cliff stays flagged."""
+    s = str(kind).lower()
+    is_bonus = "bonus" in s
+    m = re.search(r"(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)", s)
+    if m:
+        a, b = float(m.group(1)), float(m.group(2))
+        if a <= 0 or b <= 0:
+            return None
+        if is_bonus:
+            return round(a / (a + b), 6)
+        return round(min(a, b) / max(a, b), 6) if a != b else None
+    if is_bonus and re.search(r"bonus\s+\d", s):  # "Bonus 1" = one new per held
+        return 0.5
+    m = re.search(r"(?:rs\.?|inr)?\s*(\d+(?:\.\d+)?)\s*(?:/-)?\s*to\s*(?:rs\.?|inr)?\s*(\d+(?:\.\d+)?)", s)
+    if m:
+        a, b = float(m.group(1)), float(m.group(2))
+        if a <= 0 or b <= 0 or a == b:
+            return None
+        return round(min(a, b) / max(a, b), 6)
+    return None
+
+
+def _split_ratio(subject: str) -> float | None:
+    """Price multiplier a split/bonus imposes, or None for 'not a split' /
+    'no usable numbers' — one convention, documented in _ratio_from_num_text."""
+    s = str(subject).lower()
+    if not re.search(r"bonus|split|sub\s*div|sub-div|face\s*val", s):
+        return None
+    return _ratio_from_num_text(s)
 
 
 def record_parsed(store, symbol: str, events: list[dict]) -> str:

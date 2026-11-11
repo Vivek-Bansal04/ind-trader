@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from threading import Lock
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 import pandas as pd
 
@@ -85,6 +87,16 @@ def _is_complete_and_fresh(store: BarStore, symbol: str, start: str,
         return False
     if int(np.busday_count(pd.Timestamp(last).date(), today)) > fresh_bdays:
         return False
+    # A bar stored FOR TODAY (or, before 16:15 IST, for yesterday) is not a
+    # settled tail: the session may still be running and the stored row is then
+    # an intraday snapshot. Fetching again tops it up to the real close. Without
+    # this, one run during market hours froze that day's bar forever (round-6
+    # live: a 14:14 IST dry run stored 2026-11-11 bars mid-session and every
+    # later run skipped the symbol as "fresh").
+    now = datetime.now(IST)
+    settled_cutoff = now.date() if (now.hour, now.minute) < (16, 15) else now.date() - timedelta(days=1)
+    if pd.Timestamp(last).date() > settled_cutoff:
+        return False
     if first is None:
         return False
     if (pd.Timestamp(first).date() - pd.Timestamp(start).date()).days <= 45:
@@ -95,8 +107,9 @@ def _is_complete_and_fresh(store: BarStore, symbol: str, start: str,
 def fetch_universe(symbols: list[str], store: BarStore | None = None, providers: list[DataSource] | None = None,
                    start: str = "2015-01-01", pause_s: float = 0.3,
                    skip_fresh: bool = False, fresh_bdays: int = 3,
-                   max_workers: int = 5) -> dict[str, int]:
-    """Fetch (or top up) each symbol. skip_fresh=True makes the nightly loop and a
+                   max_workers: int = 5) -> dict[str, int | None]:
+    """Fetch (or top up) each symbol -> {sym: rows_stored, or None when skipped
+    as fresh}. skip_fresh=True makes the nightly loop and a
     resumed backfill cheap: a symbol is skipped when its tail is current AND it
     either reaches ~start or is a genuine new listing (first bar after start with
     >= 60 bars — re-fetching cannot fill pre-listing history). Both conditions
@@ -105,7 +118,7 @@ def fetch_universe(symbols: list[str], store: BarStore | None = None, providers:
     Default off: an explicit `fetch` always fetches."""
     providers = providers or build_providers(get_settings())
     store = store or BarStore()
-    results: dict[str, int] = {}
+    results: dict[str, int | None] = {}
     end = (date.today() + timedelta(days=1)).isoformat()
     today = date.today()
 
@@ -115,7 +128,7 @@ def fetch_universe(symbols: list[str], store: BarStore | None = None, providers:
         if skip_fresh and _is_complete_and_fresh(store, sym, start, fresh_bdays, today):
             _, last, n = _history_shape(store, sym)
             print(f"[etl] {sym}: fresh ({n} rows, last bar {last}) — skipped")
-            results[sym] = 0
+            results[sym] = None  # NOT fetched — distinct from 0 ("fetched, no data")
             continue
         todo.append(sym)
 
@@ -136,7 +149,7 @@ def fetch_universe(symbols: list[str], store: BarStore | None = None, providers:
     return results
 
 
-def run_etl(universe_file=None, store: BarStore | None = None) -> dict[str, int]:
+def run_etl(universe_file=None, store: BarStore | None = None) -> dict[str, int | None]:
     symbols = load_universe(universe_file)
     return fetch_universe(symbols, store=store, skip_fresh=True)
 
