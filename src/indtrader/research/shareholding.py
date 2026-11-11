@@ -162,40 +162,55 @@ def ingest_pattern_payload(store, symbol: str, payload) -> int:
 
 
 def try_fetch(store, symbol: str, client=None) -> dict:
-    """Live fetch: call the library method, STORE THE RAW PAYLOAD, and — since
-    round 4 confirmed the shape — parse the pattern rows too. Unconfirmed shapes
-    still refuse: parse failure is reported, never swallowed into empty results."""
+    """Live probe v2 (round-7): sweep EVERY shareholding-ish method × arg form,
+    store each non-empty payload RAW, and ingest the confirmed quarterly-summary
+    shape wherever it appears. Round-5 lesson: a one-shot arg-form lottery
+    landed on the per-holder DETAIL view and (correctly) refused — but the
+    right answer is to keep probing and take the rows from whichever payload
+    genuinely carries the confirmed shape, reporting every form seen."""
+    from indtrader.data.payloads import payload_shape
+
     if client is None:
         from indtrader.data.nseapi_provider import NseIndiaApiProvider
         client = NseIndiaApiProvider().client()
     cands = [m for m in dir(client) if "shareholding" in m.lower() or "shp" in m.lower()]
     if not cands:
         return {"ok": False, "error": f"no shareholding method in {type(client).__name__}"}
-    last_err = None
+    sym = symbol.upper()
+    forms = ((sym,), (sym, "Quarter on Quarter"), (sym, "Company"),
+             (sym, "Promoters"), (sym, "Institutions"), ())
+    probed, quarters, raws = [], 0, 0
     for m in cands:
-        for args in ((symbol.upper(),), (symbol.upper(), "Quarter on Quarter"), ()):
+        meth = getattr(client, m)
+        for args in forms:
+            label = f"{m}({', '.join(map(repr, args))})"
             try:
-                data = getattr(client, m)(*args)
+                data = meth(*args)
             except TypeError as e:
-                last_err = e
-                continue
+                probed.append(f"{label}: signature-miss {str(e)[:60]}")
+                continue  # wrong arg form for this signature — next form
             except Exception as e:
-                return {"ok": False, "error": f"{m}{args} -> {type(e).__name__}: {str(e)[:140]}"}
-            sample = data
-            if isinstance(data, dict):
-                sample = data.get("data") or data
-            keys = None
-            if isinstance(sample, list) and sample and isinstance(sample[0], dict):
-                keys = sorted(sample[0])
-            store_raw(store, symbol, m, data)
-            stored = None
+                probed.append(f"{label}: {type(e).__name__}: {str(e)[:90]}")
+                break  # the endpoint itself failed — don't hammer it
+            empty = (data is None
+                     or (isinstance(data, dict) and not (data.get("data") or data))
+                     or (isinstance(data, list) and not data))
+            if empty:
+                probed.append(f"{label}: {payload_shape(data)}")
+                continue
+            store_raw(store, sym, label, data)
+            raws += 1
             try:
-                stored = ingest_pattern_payload(store, symbol, data)
-                note = f"{stored} pattern rows recorded (confirmed round-4 shape); raw also stored"
+                n = ingest_pattern_payload(store, sym, data)
+                quarters += n
+                probed.append(f"{label}: {payload_shape(data)} -> CONFIRMED shape, "
+                              f"{n} quarters recorded")
+                break  # the right view for this method; later forms are the same data restated
             except (KeyError, ValueError) as e:
-                note = f"raw stored; pattern parse REFUSED: {e}"
-            return {"ok": True, "method": m, "stored_raw": True,
-                    "row_keys": keys, "pattern_rows_stored": stored,
-                    "note": note,
-                    "last_err": None if not last_err else str(last_err)[:120]}
-    return {"ok": False, "error": f"tried {cands}: {str(last_err)[:140]}"}
+                probed.append(f"{label}: {payload_shape(data)} -> not the confirmed "
+                              f"summary ({str(e)[:70]})")
+    ok = quarters > 0
+    return {"ok": ok, "quarters_recorded": quarters, "raws_stored": raws, "probed": probed,
+            "note": (f"{quarters} quarters from the confirmed shape" if ok else
+                     "no payload carried the confirmed summary shape — raws stored, "
+                     "the probed inventory decides the next move")}

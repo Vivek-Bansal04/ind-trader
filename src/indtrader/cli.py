@@ -345,6 +345,31 @@ def cmd_holidays(args) -> int:
         store.close()
 
 
+def _symbol_split_gaps(store: BarStore, sym: str, df: pd.DataFrame, jump: float) -> list[str]:
+    """The SPLIT-GAP arithmetic for ONE symbol (shared by `health` and
+    `coractions --gap-list` so the two can never drift): every |raw move| >=
+    jump must be matched by a MERGED-factor step of split size that day
+    (F = adj/raw back-adjustment: a 1:2 split halves closes at d and steps F
+    by ~2.0 there). A step of ~1.0 (dividend-only) leaves the cliff in the
+    ADJUSTED series — the round-4 HDFCBANK lie. Returns ['date +x%', ...]."""
+    fc = store.combined_factors(sym)
+    gaps = []
+    pct = df["close"].pct_change()
+    for ts, p in pct[pct.abs() >= jump].items():
+        d = pd.Timestamp(ts)
+        step = None
+        if len(fc):
+            before = fc[fc.index < d]
+            on = fc[fc.index <= d]
+            if len(on):  # no factor at/before d at all -> step None -> gap
+                b = float(before.iloc[-1]) if len(before) else 1.0
+                step = round(float(on.iloc[-1]) / b, 3) if b else None
+        covered = step is not None and (0.4 <= step <= 0.7 or 1.4 <= step <= 2.5)
+        if not covered:
+            gaps.append(f"{d.date()} {p:+.0%}" + (f" (factor step {step})" if step else ""))
+    return gaps
+
+
 def cmd_health(args) -> int:
     """Data-health strip: rows, span, missing sessions vs the index calendar, staleness,
     adjustment coverage, split-gap. Exits 1 when any symbol crosses the thresholds — a
@@ -377,23 +402,9 @@ def cmd_health(args) -> int:
             cov = round(float(f.reindex(df.index, method="ffill").ffill().notna().mean()), 3) if len(f) else 0.0
             # Split-gap runs against the MERGED factors (yf + recorded NSE splits):
             # the question is "is the adjusted series wrong", not "does yf alone
-            # cover it" — a symbol whose split was recorded by coractions must go
-            # quiet here, and one still named has a cliff NO source explains.
-            fc = store.combined_factors(sym)
-            gaps = []
-            pct = df["close"].pct_change()
-            for ts, p in pct[pct.abs() >= SPLIT_JUMP].items():
-                d = pd.Timestamp(ts)
-                step = None
-                if len(fc):
-                    before = fc[fc.index < d]
-                    on = fc[fc.index <= d]
-                    if len(on):  # no factor at/before d at all -> step None -> gap
-                        b = float(before.iloc[-1]) if len(before) else 1.0
-                        step = round(float(on.iloc[-1]) / b, 3) if b else None
-                covered = step is not None and (0.4 <= step <= 0.7 or 1.4 <= step <= 2.5)
-                if not covered:
-                    gaps.append(f"{d.date()} {p:+.0%}" + (f" (factor step {step})" if step else ""))
+            # cover it" — a symbol whose split was recorded must go quiet here,
+            # and one still named has a cliff NO source explains.
+            gaps = _symbol_split_gaps(store, sym, df, SPLIT_JUMP)
             if gaps:
                 split_gaps.append(f"{sym}: " + "; ".join(gaps[:4]) + (" ..." if len(gaps) > 4 else ""))
             rows.append({"symbol": sym, "rows": len(df), "first": str(df.index[0].date()),
@@ -802,15 +813,62 @@ def cmd_shareholding(args) -> int:
 
 
 def cmd_coractions(args) -> int:
-    """Probe-only corporate-actions fetch (the split-factor cure). v2 probes EVERY
-    corporate-actions-ish method/arg-form and prints a shape inventory (round-5's
-    single payload was an empty list — one shape proved nothing). --from-raw replays
-    the confirmed-shape parser over stored payloads: zero network."""
+    """Corporate actions, four modes: probe (EVERY corporate-actions-ish
+    method/arg-form, shape inventory — round-5's single empty payload proved
+    nothing); --from-raw offline replay that BUILDS factors from stored
+    payloads; --set for one human-confirmed event when NSE's text states no
+    ratio; and --gap-list to batch-probe every symbol health would name.
+    Parsing stays confirmed-shape-only in every path."""
+    from pathlib import Path
+
+    from indtrader.data.universe import load_universe
     from indtrader.research import coractions as ca
 
     store = BarStore()
     try:
+        if args.set_event is not None:
+            if not args.symbol:
+                print("coractions --set needs SYMBOL", file=sys.stderr)
+                return 2
+            try:
+                print(ca.record_manual_event(store, args.symbol, args.set_event))
+                return 0
+            except ValueError as e:
+                print(f"bad corporate action: {e}", file=sys.stderr)
+                return 2
+
+        if args.gap_list:
+            from indtrader.data.nseapi_provider import NseIndiaApiProvider
+
+            if not NseIndiaApiProvider.available():
+                print("coractions --gap-list needs the nse lib (pip install 'indtrader[nse]') "
+                      "— run on the laptop", file=sys.stderr)
+                return 2
+            flagged = []
+            for s in load_universe(Path(args.file) if args.file else None):
+                df = store.load(s, validate=False)
+                if not df.empty and _symbol_split_gaps(store, s, df, 0.35):
+                    flagged.append(s)
+            if args.limit:
+                flagged = flagged[:args.limit]
+            print(f"[coractions] split-gap symbols: {len(flagged)} — probing each once "
+                  "(N in a line = factors stored, U = unresolved ratio-less events)")
+            got_any = 0
+            for s in flagged:
+                out = ca.try_fetch(store, s)
+                marks = [x for x in out.get("probed", []) if "split factors" in x or "UNRESOLVED" in x]
+                tail = marks[-1].split(": ", 1)[1] if marks else (out.get("error") or "no parseable payload")
+                print(f"  {s}: {tail[:140]}")
+                if "split factors" in tail and " 0 split factors" not in tail:
+                    got_any += 1
+            print(f"[coractions] factors or events landed for {got_any}/{len(flagged)}; "
+                  "re-run health to see the SPLIT-GAP list shrink")
+            return 0
+
         if args.from_raw:
+            if not args.symbol:
+                print("--from-raw needs SYMBOL", file=sys.stderr)
+                return 2
             outs = []
             for fetched_on, method, payload in ca.raw_payloads(store, args.symbol):
                 try:
@@ -825,6 +883,10 @@ def cmd_coractions(args) -> int:
                 return 1
             print(json.dumps(outs, indent=1, default=str))
             return 0
+
+        if not args.symbol:
+            print("coractions needs SYMBOL (probe/--from-raw/--set) or --gap-list", file=sys.stderr)
+            return 2
         from indtrader.data.nseapi_provider import NseIndiaApiProvider
 
         if not NseIndiaApiProvider.available():
@@ -1479,9 +1541,15 @@ def main(argv=None) -> int:
     s.set_defaults(fn=cmd_shareholding)
     s = sub.add_parser("coractions",
                        help="probe corporate actions (split factors) - raw stored, parse awaits shape")
-    s.add_argument("symbol")
+    s.add_argument("symbol", nargs="?", default=None)
     s.add_argument("--from-raw", dest="from_raw", action="store_true",
                    help="offline: replay the confirmed-shape parser over stored payloads (no network)")
+    s.add_argument("--set", dest="set_event", default=None, metavar="DATE|KIND|RATIO",
+                   help="human-confirmed event, ratio = price multiplier (1:2 split -> 0.5)")
+    s.add_argument("--gap-list", dest="gap_list", action="store_true",
+                   help="batch: probe every symbol health would name as SPLIT-GAP")
+    s.add_argument("--file", default=None, help="universe file for --gap-list")
+    s.add_argument("--limit", type=int, default=0, help="cap symbols for --gap-list")
     s.set_defaults(fn=cmd_coractions)
     s = sub.add_parser("backup", help="online-backup bars+plans, integrity-check, prune to --keep")
     s.add_argument("--dest", default=None)

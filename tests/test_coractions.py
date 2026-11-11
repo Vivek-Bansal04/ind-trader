@@ -1,5 +1,6 @@
 import json
 
+import pandas as pd
 import pytest
 
 from indtrader.data.store import BarStore
@@ -140,3 +141,72 @@ def test_cli_coractions_needs_lib_for_live_probe(tmp_path, monkeypatch, capsys):
     assert main(["coractions", "RELIANCE"]) == 2
     assert "needs the nse lib" in capsys.readouterr().err
     get_settings.cache_clear()
+
+
+# ---- manual recording (the human-confirmed ratio route) ---------------------------------
+
+def test_record_manual_event_stores_and_refuses_garbage(store):
+    msg = ca.record_manual_event(store, "acme", "26-Aug-2025|split 1:2|0.5")
+    assert "split factor 0.5 stored" in msg
+    sf = store.split_factors("ACME")
+    assert str(sf.index[0].date()) == "2025-08-26" and float(sf.iloc[0]) == 0.5
+    # non-split kind: event stored, factor NOT invented
+    msg2 = ca.record_manual_event(store, "ACME", "2025-09-01|Dividend Rs 12|0.99")
+    assert "event only" in msg2 and len(store.split_factors("ACME")) == 1
+    for bad in ["2025-08-26|split",                  # missing ratio
+                "2025-08-26|split|1.0",              # no-op ratio
+                "2025-08-26|split|xyz",              # not a number
+                "whenever|split|0.5",                # unparseable date
+                "2025-08-26|split|0.001"]:           # out of sane range
+        with pytest.raises(ValueError):
+            ca.record_manual_event(store, "ACME", bad)
+    assert len(store.split_factors("ACME")) == 1     # refusals stored nothing
+
+
+def test_cli_coractions_set_offline(tmp_path, monkeypatch, capsys):
+    """--set needs no nse lib: the human IS the source, the code just validates."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    from indtrader.config import get_settings
+
+    get_settings.cache_clear()
+    from indtrader.cli import main
+
+    assert main(["coractions", "HDFCBANK", "--set", "26-Aug-2025|bonus 1:1|0.5"]) == 0
+    assert "split factor 0.5 stored" in capsys.readouterr().out
+    s = BarStore(tmp_path / "bars.sqlite")
+    sf = s.split_factors("HDFCBANK")
+    s.close()
+    assert float(sf.iloc[0]) == 0.5
+    get_settings.cache_clear()
+
+
+def test_cli_coractions_gap_list_needs_lib(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    from indtrader.config import get_settings
+
+    get_settings.cache_clear()
+    import indtrader.data.nseapi_provider as P
+    monkeypatch.setattr(P.NseIndiaApiProvider, "available", staticmethod(lambda: False))
+    from indtrader.cli import main
+
+    assert main(["coractions", "--gap-list"]) == 2
+    assert "needs the nse lib" in capsys.readouterr().err
+    get_settings.cache_clear()
+
+
+def test_symbol_split_gaps_shared_arithmetic(store):
+    """The batch's view MUST match health's: same helper, so drift is impossible."""
+    import numpy as np
+
+    dates = pd.bdate_range("2025-08-20", periods=8)
+    closes = np.array([100, 100, 100, 50, 50, 50, 50, 50], dtype=float)
+    store.upsert_candles("CLIFF", "daily",
+                         pd.DataFrame({"open": closes, "high": closes, "low": closes,
+                                       "close": closes, "volume": 1e5}, index=dates), "test")
+    store.upsert_adj_factors("CLIFF", pd.Series(1.0, index=dates), "yfinance")
+    from indtrader.cli import _symbol_split_gaps
+
+    df = store.load("CLIFF", validate=False)
+    assert len(_symbol_split_gaps(store, "CLIFF", df, 0.35)) == 1   # dividend-only lie
+    store.upsert_split_factors("CLIFF", {dates[3].date().isoformat(): 0.5})
+    assert _symbol_split_gaps(store, "CLIFF", df, 0.35) == []       # recorded -> quiet

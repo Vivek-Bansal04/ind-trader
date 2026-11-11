@@ -28,6 +28,8 @@ import re
 
 import pandas as pd
 
+from indtrader.data.payloads import parse_iso_day, payload_shape  # noqa: F401 (re-exported: ca.parse_iso_day)
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS corporate_actions_raw(
     symbol TEXT, fetched_on TEXT, method TEXT, payload TEXT
@@ -69,26 +71,6 @@ def raw_payloads(store, symbol: str) -> list[tuple[str, str, object]]:
     return [(r[0], r[1], json.loads(r[2])) for r in store.con.execute(
         "SELECT fetched_on, method, payload FROM corporate_actions_raw "
         "WHERE symbol=? ORDER BY rowid DESC", [symbol.upper()]).fetchall()]
-
-
-def payload_shape(payload) -> str:
-    """One-line shape report — what the probe output teaches the parser."""
-    if isinstance(payload, dict):
-        d = payload.get("data", payload)
-        if isinstance(d, list):
-            if not d:
-                return "dict.data: empty list"
-            if isinstance(d[0], dict):
-                return f"dict.data: {len(d)} rows, keys={sorted(d[0])[:12]}"
-            return f"dict.data: {len(d)} entries of {type(d[0]).__name__}"
-        return f"dict keys={sorted(payload)[:12]}"
-    if isinstance(payload, list):
-        if not payload:
-            return "empty list"
-        if isinstance(payload[0], dict):
-            return f"list: {len(payload)} rows, keys={sorted(payload[0])[:12]}"
-        return f"list: {len(payload)} entries of {type(payload[0]).__name__}"
-    return f"{type(payload).__name__}"
 
 
 def _split_ratio(subject: str) -> float | None:
@@ -169,6 +151,34 @@ def build_split_factors(store, symbol: str, events: list[dict]) -> tuple[int, li
     return n, unresolved
 
 
+def record_manual_event(store, symbol: str, spec: str) -> str:
+    """Human-confirmed event from the exchange record: "DATE|KIND|RATIO", where
+    RATIO is the PRICE MULTIPLIER on the ex-date (1:2 split -> 0.5, bonus 1:1
+    -> 0.5, face value 10->2 -> 0.2). This is the honest fallback when NSE's
+    own text states no ratio: the human reads the number off the exchange
+    record, the code never derives it. Kind must look split-like to create a
+    factor — recording a dividend with a ratio stays event-only. Everything
+    raises on bad input; a typo'd ratio out of sane range is refused, not
+    stored as the new truth."""
+    parts = [p.strip() for p in str(spec).split("|")]
+    if len(parts) != 3:
+        raise ValueError(f"want DATE|KIND|RATIO (e.g. 2025-08-26|split 1:2|0.5), got {spec!r}")
+    day = parse_iso_day(parts[0]).isoformat()
+    kind = parts[1] or "split"
+    try:
+        ratio = float(parts[2])
+    except ValueError:
+        raise ValueError(f"ratio must be a number (the price multiplier), got {parts[2]!r}")
+    if not (0.01 <= ratio <= 100) or ratio == 1.0:
+        raise ValueError(f"ratio {ratio} outside sane price-multiplier range (0.01..100, not 1.0) "
+                         "— a 1:2 split is 0.5, a 1:1 bonus is 0.5")
+    upsert_corporate_actions(store, symbol, [{"date": day, "kind": kind, "ratio": ratio}])
+    if is_split_kind(kind):
+        store.upsert_split_factors(symbol, {day: ratio})
+        return f"recorded {symbol.upper()} {day} '{kind}' -> split factor {ratio} stored"
+    return f"recorded {symbol.upper()} {day} '{kind}' (event only — not a split-like kind, no factor)"
+
+
 def parse_events(symbol: str, payload) -> list[dict]:
     """Confirmed-shape-only parse: -> [{date, kind, ratio, symbol}]. Raises naming
     the tried key spellings AND the actual row keys (probe first, never guess)."""
@@ -205,24 +215,6 @@ def parse_events(symbol: str, payload) -> list[dict]:
             except (TypeError, ValueError):
                 out[-1]["faceVal"] = None
     return out
-
-
-def parse_iso_day(d: str):
-    """"26-Aug-2025" or ISO -> datetime.date. Raises on anything else — a
-    corporate-action date that can't be read is an error, never a skipped row."""
-    from datetime import date as _date, datetime
-
-    s = str(d).strip()
-    try:
-        return _date.fromisoformat(s)
-    except ValueError:
-        pass
-    for fmt in ("%d-%b-%Y", "%d-%m-%Y", "%d/%m/%Y"):
-        try:
-            return datetime.strptime(s, fmt).date()
-        except ValueError:
-            continue
-    raise ValueError(f"unparseable corporate-action date: {s!r}")
 
 
 def is_split_kind(kind: str) -> bool:

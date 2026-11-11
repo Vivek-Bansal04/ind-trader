@@ -33,14 +33,16 @@ def test_no_quiet_false_positives(store):
     assert sh.holding_alerts(store, ["CALM"]) == []
 
 
-def test_try_fetch_stores_raw_and_reports_keys_never_parses(store):
+def test_try_fetch_stores_raw_and_never_invents_rows(store):
     class FakeNSE:
         def shareholding(self, symbol):
             return {"data": [{"someOddKey": 1, "another": 2}]}
 
     out = sh.try_fetch(store, "tata", client=FakeNSE())
-    assert out["ok"] and out["method"] == "shareholding" and out["stored_raw"]
-    assert out["row_keys"] == ["another", "someOddKey"]           # the answer the parser waits for
+    assert not out["ok"] and out["raws_stored"] == 1          # raw kept for the record
+    joined = "\n".join(out["probed"])
+    assert "someOddKey" in joined                              # the shape the parser saw
+    assert "not the confirmed summary" in joined
     raw = store.con.execute("SELECT payload FROM shareholding_raw").fetchone()[0]
     assert json.loads(raw)["data"][0]["someOddKey"] == 1
     # normalized table stays EMPTY — unknown shape never becomes rows
@@ -93,17 +95,28 @@ def test_parse_pattern_rows_refuses_when_shape_changed():
 
 
 def test_try_fetch_now_records_confirmed_pattern(store):
-    """Round-4 confirmed the shape, so try_fetch records pattern rows AND the raw
-    blob. FII/DII/pledge stay NULL — the payload has none, and nulls stay nulls."""
+    """Round-4 confirmed the shape; the v2 sweep records pattern rows from
+    whichever payload actually carries it — the round-5 detail-view payload
+    no longer blocks the good one."""
     class FakeNSE:
         def shareholding(self, symbol):
             return {"data": REL_ROWS}
 
+        def shareholding_details(self, symbol, view=None):
+            if view is None:  # the per-holder DETAIL view round 5 fell into
+                return {"data": [{"holder": "ABC MUTUAL FUND", "pct": 4.2}]}
+            return {"data": REL_ROWS}
+
     out = sh.try_fetch(store, "RELIANCE", client=FakeNSE())
-    assert out["ok"] and out["pattern_rows_stored"] == 2
-    assert "confirmed round-4 shape" in out["note"]
+    assert out["ok"] and out["quarters_recorded"] >= 2
+    joined = "\n".join(out["probed"])
+    assert "not the confirmed summary" in joined        # detail view: seen, reported, refused
+    assert "CONFIRMED shape" in joined                  # summary view: rows recorded
+    assert "confirmed shape" in out["note"]
+    assert len(sh.rows(store, "RELIANCE")) == 2         # re-ingest replaces, never duplicates
     df = sh.rows(store, "RELIANCE")
     assert list(df["period"]) == ["Q1FY27", "Q2FY27"]
     assert df["promoter"].tolist() == [50.31, 50.44]
     assert df["fii"].isna().all()                        # unknown stays unknown
-    assert store.con.execute("SELECT count(*) FROM shareholding_raw").fetchone()[0] == 1
+    # v2 stores EVERY non-empty payload raw: summary + detail + summary-restated
+    assert store.con.execute("SELECT count(*) FROM shareholding_raw").fetchone()[0] == 3
