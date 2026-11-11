@@ -1,8 +1,6 @@
 # HOME-VALIDATION test results
 
-Run on: macOS, Python 3.13.1, repo at `~/Desktop/ind-trader`
-Command: `.venv/bin/python -m pytest -v`
-Result: **146 passed, 1 failed** (exit code 1)
+Run on: macOS, Python 3.13.1, repo at `~/Desktop/ind-trader` Command: `.venv/bin/python -m pytest -v` Result: **146 passed, 1 failed** (exit code 1)
 
 See `pytest-full.log` for full verbose output.
 
@@ -23,10 +21,11 @@ This is an environment mismatch, not a code bug. The underlying `TypeError` cras
 
 ## Changes kept
 
-- `src/indtrader/data/announce.py` — fixed `NSE()` to pass `download_folder` (real bug fix requested by user).
+-   `src/indtrader/data/announce.py` — fixed `NSE()` to pass `download_folder` (real bug fix requested by user).
 
 ## Testing artifacts removed
 
 Untracked files created during validation runs were cleaned up (see cleanup steps below):
-- `data/bars.sqlite`, `data/universe50.txt`, `data/universe.txt`, `fetch_universe.log`
-- `.pytest_cache/`, `__pycache__/` directories
+
+-   `data/bars.sqlite`, `data/universe50.txt`, `data/universe.txt`, `fetch_universe.log`
+-   `.pytest_cache/`, `__pycache__/` directories
