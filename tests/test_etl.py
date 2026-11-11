@@ -75,6 +75,47 @@ def test_nseapi_row_mapping(monkeypatch):
     assert df["volume"].iloc[0] == 14255503
 
 
+def test_nseapi_camelcase_keys_accepted(monkeypatch):
+    """2026-11-11 live: the archive response moved to camelCase keys (round-3 probe
+    printed the real row). Both spellings must parse — a rollback must not read as
+    '0 rows of data' again."""
+    from indtrader.data.nseapi_provider import NseIndiaApiProvider
+
+    camel = [{
+        "mtimestamp": "2026-10-31", "chSymbol": "RELIANCE", "chSeries": "EQ",
+        "chOpeningPrice": 1200.0, "chTradeHighPrice": 1234.5, "chTradeLowPrice": 1190.0,
+        "chClosingPrice": 1230.25, "chLastTradedPrice": 1230.0,
+        "chTotTradedQty": 8123456, "chTotTradedVal": 9.9e9, "chTotalTrades": 45678,
+        "ch52WeekHighPrice": 1600.0, "ch52WeekLowPrice": 1100.0,
+        "chPreviousClsPrice": 1199.0, "vwap": 1210.0,
+    }]
+
+    class FakeNSE:
+        def __init__(self, download_folder=None):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def fetch_equity_historical_data(self, symbol, from_date=None, to_date=None):
+            return camel
+
+    import sys
+    import types
+
+    fake_mod = types.ModuleType("nse")
+    fake_mod.NSE = FakeNSE
+    monkeypatch.setitem(sys.modules, "nse", fake_mod)
+
+    df = NseIndiaApiProvider().daily("reliance", "2026-10-01", "2026-10-31")
+    assert len(df) == 1
+    assert df["close"].iloc[0] == 1230.25
+    assert df["open"].iloc[0] == 1200.0
+
+
 # ---- skip_fresh: resume-friendly re-runs (the 2-hour re-download problem) ------
 
 class CountingProvider:

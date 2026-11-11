@@ -253,7 +253,29 @@ def cmd_holidays(args) -> int:
         bar_days = {str(d)[:10] for d in pd.to_datetime(idx.index)}
         yr_days = {d for d in hol if d.startswith(str(year))}
         bad = sorted(d for d in yr_days if d in bar_days and _date.fromisoformat(d).weekday() < 5)
-        print("holidays that HAVE bars (should be none unless half-day/weekend-listed):", bad or "none")
+        print("holidays that HAVE index bars (real drift or special session):", bad or "none")
+        if bad:
+            # Discriminate: the index only prints when the market trades, so an
+            # index bar on a holiday date is either a half-day/special session or a
+            # wrong calendar row. A few stock bars on such a date = feed leakage.
+            ph = ",".join("?" * len(bad))
+            counts = dict(store.con.execute(
+                f"SELECT d, count(DISTINCT symbol) FROM candles WHERE d IN ({ph}) AND tf='daily' "
+                f"GROUP BY d", bad).fetchall())
+            for d in bad:
+                print(f"  {d}: NIFTY bar present, {counts.get(d, 0)} symbols have bars "
+                      f"(a handful -> yfinance feed leakage; thousands -> calendar row wrong)")
+        # also report holiday dates that have stock bars but NO index bar
+        strays = sorted((d for d in yr_days
+                         if d not in bar_days and _date.fromisoformat(d).weekday() < 5))
+        if strays:
+            ph = ",".join("?" * len(strays))
+            hits = store.con.execute(
+                f"SELECT d, count(DISTINCT symbol) FROM candles WHERE d IN ({ph}) AND tf='daily' "
+                f"GROUP BY d", strays).fetchall()
+            if hits:
+                print("holiday with STOCK bars but no index bar (contaminated):",
+                      ", ".join(f"{d} [{c} symbols]" for d, c in hits))
         return 0
     finally:
         store.close()

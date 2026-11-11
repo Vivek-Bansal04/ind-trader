@@ -49,16 +49,34 @@ class NseIndiaApiProvider:
         if not rows:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
         records, dropped = [], 0
+        # 2026-11-11 live probe (round 3): the archive endpoint's keys moved from
+        # CH_* to camelCase (chClosingPrice, mtimestamp, ...). Accept BOTH spellings
+        # — a library or exchange rollback must not turn into a silent 0-row feed.
+        KEY_CANDS = {
+            "date": ("mtimestamp", "CH_TIMESTAMP"),
+            "open": ("chOpeningPrice", "CH_OPENING_PRICE"),
+            "high": ("chTradeHighPrice", "CH_TRADE_HIGH_PRICE"),
+            "low": ("chTradeLowPrice", "CH_TRADE_LOW_PRICE"),
+            "close": ("chClosingPrice", "CH_CLOSING_PRICE"),
+            "volume": ("chTotTradedQty", "CH_TOT_TRADED_QTY"),
+        }
+
+        def pick(row: dict, field: str):
+            for k in KEY_CANDS[field]:
+                if k in row and row[k] is not None:
+                    return row[k]
+            raise KeyError(f"{field} (tried {KEY_CANDS[field]})")
+
         for r in rows:
             try:
                 records.append(
                     {
-                        "date": pd.Timestamp(r["CH_TIMESTAMP"]),
-                        "open": float(r["CH_OPENING_PRICE"]),
-                        "high": float(r["CH_TRADE_HIGH_PRICE"]),
-                        "low": float(r["CH_TRADE_LOW_PRICE"]),
-                        "close": float(r["CH_CLOSING_PRICE"]),
-                        "volume": float(r["CH_TOT_TRADED_QTY"]),
+                        "date": pd.Timestamp(pick(r, "date")),
+                        "open": float(pick(r, "open")),
+                        "high": float(pick(r, "high")),
+                        "low": float(pick(r, "low")),
+                        "close": float(pick(r, "close")),
+                        "volume": float(pick(r, "volume")),
                     }
                 )
             except (KeyError, TypeError, ValueError):

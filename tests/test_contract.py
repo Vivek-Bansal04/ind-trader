@@ -129,3 +129,115 @@ def test_cli_contract_test_and_holidays_refuse_without_lib(tmp_path, monkeypatch
     assert "needs the nse lib" in capsys.readouterr().err
     assert main(["holidays"]) == 2
     get_settings.cache_clear()
+
+
+# ---- the round-3 NameError regression: default-session path, fully offline ----------
+
+def test_cli_contract_test_default_session_end_to_end(tmp_path, monkeypatch, capsys):
+    """Round 3 live: contract-test WITHOUT --date crashed with NameError (date.
+    fromisoformat called with no import) — the laptop user fixed it by hand. This
+    test is the fence: it exercises that exact default-date path, faking ONLY the
+    two things that need the nse lib/network (available + the bhav fetch)."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    from indtrader.config import get_settings
+
+    get_settings.cache_clear()
+    import indtrader.data.nseapi_provider as P
+    from indtrader.data.store import BarStore
+
+    # seed the store the CLI will open by default: closes for one session.
+    # OHLC must be self-consistent per symbol — the store's candle validator drops
+    # bad rows silently-ish, and (correctly) contract_check then NAMES the gap.
+    seed = {"RELIANCE": (1310.0, 1330.0, 1300.0, 1324.4),
+            "HDFCBANK": (795.0, 800.0, 790.0, 798.15)}
+    store = BarStore()
+    days = ("2026-11-06", "2026-11-09")
+    for sym, (o, h, l, close) in seed.items():
+        df = pd.DataFrame({"open": [o, o], "high": [h, h], "low": [l, l],
+                           "close": [o, close], "volume": [1e6, 1e6]},
+                          index=pd.to_datetime(days))
+        store.upsert_candles(sym, "daily", df, "test")
+    store.close()
+
+    uni = tmp_path / "universe.txt"
+    uni.write_text("RELIANCE\nHDFCBANK\n")
+
+    monkeypatch.setattr(P.NseIndiaApiProvider, "available", staticmethod(lambda: True))
+    bhav = bhav_df([["09-Nov-2026", "INE000A01018", "RELIANCE", "EQ", "EQI", 1324.4, 1310.0],
+                    ["09-Nov-2026", "INE040A01034", "HDFCBANK", "EQ", "EQI", 798.15, 795.0]])
+    monkeypatch.setattr(P.NseIndiaApiProvider, "client",
+                        lambda self: type("C", (), {"equity_bhavcopy": lambda s, d: bhav,
+                                                    "close": lambda s: None})())
+    # load_bhavcopy is NOT faked: the real one runs, so date.fromisoformat(session)
+    # — the line that NameError'd in round 3 — is genuinely executed.
+
+    from indtrader.cli import main
+
+    rc = main(["contract-test", "--file", str(uni), "--min-checked", "2"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert '"session": "2026-11-09"' in out  # = store's newest bar, NOT a crash
+    assert "PASS" in out
+    get_settings.cache_clear()
+
+
+def test_cli_contract_test_empty_store_refuses(tmp_path, monkeypatch, capsys):
+    """No bars, no --date: the max(..., default=None) branch must refuse with rc=1
+    (and the word 'empty'), never guess a session date."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    from indtrader.config import get_settings
+
+    get_settings.cache_clear()
+    import indtrader.data.nseapi_provider as P
+
+    monkeypatch.setattr(P.NseIndiaApiProvider, "available", staticmethod(lambda: True))
+    uni = tmp_path / "universe.txt"
+    uni.write_text("RELIANCE\n")
+
+    from indtrader.cli import main
+
+    assert main(["contract-test", "--file", str(uni)]) == 1
+    assert "store empty" in capsys.readouterr().err
+    get_settings.cache_clear()
+
+
+# ---- holidays discriminator (round-3: 4 holidays WITH bars, cause unknown) --------
+
+def test_cli_holidays_discriminates_calendar_vs_leakage(tmp_path, monkeypatch, capsys):
+    """Round-3 printed dates-with-bars and stopped there. The upgraded command must
+    classify: an index bar on a holiday where only a HANDFUL of symbols traded is
+    feed leakage; thousands means the calendar row itself is wrong. Offline test =
+    fake calendar client + seeded store, exercising the real SQL branch."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    from indtrader.config import get_settings
+
+    get_settings.cache_clear()
+    import indtrader.data.nseapi_provider as P
+    from indtrader.data.store import BarStore
+
+    hol_date = "2026-02-19"
+    store = BarStore()
+    days = ("2026-02-18", hol_date)
+    ohlc = {"open": [100.0] * 2, "high": [101.0] * 2, "low": [99.0] * 2,
+            "close": [100.0] * 2, "volume": [1e6] * 2}
+    # NIFTY printed a bar on the holiday, plus 2 stocks -> leakage signal
+    for sym in ("NIFTY", "FAKECO1", "FAKECO2"):
+        store.upsert_candles(sym, "daily", pd.DataFrame(ohlc, index=pd.to_datetime(days)), "test")
+    store.close()
+
+    fake_cal = {hol_date: "Test Holiday"}
+    monkeypatch.setattr(P.NseIndiaApiProvider, "available", staticmethod(lambda: True))
+    monkeypatch.setattr(P.NseIndiaApiProvider, "client",
+                        lambda self: type("C", (), {"holidays": lambda s: {"CBM": [
+                            {"tradingDate": "19-Feb-2026", "weekDay": "Thursday",
+                             "description": "Test Holiday"}]},
+                            "close": lambda s: None})())
+
+    from indtrader.cli import main
+
+    rc = main(["holidays", "--year", "2026"])
+    out = capsys.readouterr().out
+    assert rc == 0, out
+    assert hol_date in out
+    assert "NIFTY bar present, 3 symbols" in out  # the discriminator line, with count
+    get_settings.cache_clear()
