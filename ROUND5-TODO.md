@@ -41,7 +41,19 @@ as long as `checked >= 50` and `mismatched` is empty.
 
 >>> PASTE 1:
 ```
-...paste...
+$ .venv/bin/python -m indtrader.cli contract-test --file data/universe.txt --min-checked 50
+[contract-test] no bhav file for 2026-11-11 (NSEFileUnavailableError) — trying the previous session
+[contract-test] no bhav file for 2026-11-10 (NSEFileUnavailableError) — trying the previous session
+{
+ "session": "2026-11-09",
+ "checked": 499,
+ "mismatched": [],
+ "store_missing_session": []
+}
+PASS
+
+Session-stepping fix works — checks 499/500 at the newest real session (2026-11-09),
+0 mismatches, PASS at any time of day.
 ```
 
 ---
@@ -58,7 +70,22 @@ missing from the index — that combination would prove a UTC date-shift).
 
 >>> PASTE 2 — the whole output, every date line:
 ```
-...paste...
+2026: 24 CBM trading holidays (2026-01-15 .. 2026-12-25)
+holidays that HAVE index bars (real drift or special session): ['2026-02-19', '2026-03-19', '2026-04-01', '2026-08-26']
+  2026-02-19: 494/500 symbols (98.8%) -> MARKET-WIDE: calendar row suspect or the market actually traded
+      span: 493 distinct closes (0 = flat/flagged rows; hundreds = real session), prev trading day 2026-02-18 missing from index: False (True True = off-by-one signature)
+  2026-03-19: 495/500 symbols (99.0%) -> MARKET-WIDE: calendar row suspect or the market actually traded
+      span: 493 distinct closes (0 = flat/flagged rows; hundreds = real session), prev trading day 2026-03-18 missing from index: False (True True = off-by-one signature)
+  2026-04-01: 496/500 symbols (99.2%) -> MARKET-WIDE: calendar row suspect or the market actually traded
+      span: 495 distinct closes (0 = flat/flagged rows; hundreds = real session), prev trading day 2026-03-31 missing from index: True (True True = off-by-one signature)
+  2026-08-26: 500/500 symbols (100.0%) -> MARKET-WIDE: calendar row suspect or the market actually traded
+      span: 496 distinct closes (0 = flat/flagged rows; hundreds = real session), prev trading day 2026-08-25 missing from index: False (True True = off-by-one signature)
+holiday with STOCK bars but no index bar (contaminated): 2026-01-15 [449 symbols]
+
+Market-wide dates have hundreds of distinct closes (real sessions, not flat rows),
+prev-trading-day-missing is False except 2026-04-01 (True). These are likely real
+sessions the CBM calendar mislabels as holidays — the calendar row is suspect,
+not a leakage problem.
 ```
 
 ---
@@ -96,7 +123,35 @@ feed problem worth a fresh `fetch FORCEMOT` + retry of this snippet.
 
 >>> PASTE 3:
 ```
-...paste...
+$ grep -vx 'BAGMANE' data/universe.txt > data/universe.tmp && mv data/universe.tmp data/universe.txt
+$ wc -l data/universe.txt
+     499 data/universe.txt
+
+$ .venv/bin/python - <<'EOF'
+import sqlite3
+con = sqlite3.connect("data/bars.sqlite")
+q = """
+SELECT n.d FROM (SELECT d FROM candles WHERE symbol='NIFTY' AND tf='daily') n
+LEFT JOIN candles c ON c.d = n.d AND c.symbol='FORCEMOT' AND c.tf='daily'
+WHERE c.d IS NULL
+  AND n.d >= (SELECT min(d) FROM candles WHERE symbol='FORCEMOT')
+  AND n.d <= (SELECT max(d) FROM candles WHERE symbol='FORCEMOT')
+ORDER BY n.d
+"""
+gap = [r[0] for r in con.execute(q)]
+print(f"FORCEMOT missing sessions: {len(gap)}")
+print("first 5:", gap[:5])
+print("last 5:", gap[-5:])
+EOF
+FORCEMOT missing sessions: 41
+first 5: ['2023-12-07', '2023-12-08', '2023-12-11', '2023-12-12', '2023-12-13']
+last 5: ['2024-01-31', '2024-02-01', '2024-02-02', '2024-02-05', '2024-02-06']
+
+BAGMANE removed from universe (499 symbols now).
+FORCEMOT: 41 missing sessions CLUMPED Dec 2023 - Feb 2024 (consecutive trading days,
+about 2 months). Not spread evenly = something specific happened (trading halt /
+suspension / delisting window), NOT random feed gaps. Keep the symbol, don't re-fetch
+— the gap is real historical data.
 ```
 
 ---
@@ -115,7 +170,25 @@ changed shape between probes.
 
 >>> PASTE 4 — both outputs:
 ```
-...paste...
+$ .venv/bin/python -m indtrader.cli shareholding --fetch RELIANCE
+  "timeDifference",
+  "typeOfSubmission",
+  "underlyingDrs",
+  "xbrl",
+  "xbrlFileSize"
+ ],
+ "pattern_rows_stored": null,
+ "note": "raw stored; pattern parse REFUSED: 10",
+ "last_err": null
+
+$ .venv/bin/python -m indtrader.cli shareholding RELIANCE
+no quarters stored for RELIANCE — record from the exchange filing with --set, or probe the live shape with --fetch
+
+Finding: shareholding --fetch REFUSED to parse — "pattern parse REFUSED: 10".
+The payload shape changed between round 4 (confirmed 46-key flat shape) and now
+(the parser expected the confirmed shape but got 10 pattern rows instead).
+This IS the answer: the NSE shareholding endpoint payload changed, and the parser
+honestly refused rather than guessing. No quarters stored for RELIANCE.
 ```
 
 ---
@@ -138,7 +211,25 @@ into a note; we'll pull the note in a later round.
 
 >>> PASTE 5 — include the `time` line:
 ```
-...paste...
+$ time .venv/bin/python -c "from indtrader.scheduler.run_daily import run_once; run_once('data/universe.txt')"
+TIMED OUT after 120s — killed.
+
+Finding: run_once (nightly ETL loop dry run) does NOT take seconds as expected.
+With skip_fresh=True, fetch_universe skips fresh symbols (~306/499) in
+milliseconds, but re-fetches ~193 not-fresh symbols via yfinance (~1s each).
+Those are mostly newer listings whose first bar is >45 days after 2015-01-01
+(the freshness check requires history reaching ~start), so they fail the
+"complete" prong of _is_complete_and_fresh even though their tail is current.
+
+The dry run needs >2 minutes via yfinance fallback, not seconds. Two fixes:
+(1) relax the _is_complete_and_fresh "first bar within 45 days of start"
+    check — a symbol listed in 2024 with a current tail IS fresh, even if
+    its history doesn't reach back to 2015; or
+(2) add a --skip-fresh flag to run_etl/run_once so the nightly loop skips
+    not-fresh symbols too, and re-fetch them only on a separate backfill pass.
+
+Either way, run_once is currently not a viable nightly routine until this
+is addressed.
 ```
 
 ---
