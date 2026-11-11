@@ -71,37 +71,62 @@ def _history_shape(store: BarStore, symbol: str) -> tuple[str | None, str | None
 
 def _is_complete_and_fresh(store: BarStore, symbol: str, start: str,
                            fresh_bdays: int, today: date) -> bool:
-    """Skip candidate: tail within fresh_bdays business days of today AND (history
-    reaching back to ~start OR a genuine new listing: first bar after start with a
-    real current tail). Round-5 live: ~193 of 499 symbols listed after 2015 failed
-    the old both-prongs rule every single night — a re-fetch can't invent bars
-    before their listing, so run_once blew past 2 minutes for nothing. A shallow
-    series (fewer than NEW_LISTING_MIN_ROWS bars) is still refetched — the
-    'quietly shortened series' guard stays for everything a re-fetch could fix."""
-    import numpy as np
+    """Skip candidate: tail sits ON the latest SETTLED session the NIFTY calendar
+    confirms AND (history reaching back to ~start OR a genuine new listing: first
+    bar after start with a real current tail).
 
-    NEW_LISTING_MIN_ROWS = 60  # ~3 months of dailies: shallow-but-current is suspect
-
+    Round-8 correction (the user's "missed two evenings" question): the old rule
+    skipped any tail within `fresh_bdays` business days — a 1-2 day hole was
+    'fresh', so missed evenings self-healed only once the gap grew past the
+    tolerance constant. The correct anchor is the exchange's own calendar: a
+    tail is fresh iff it holds the latest settled session; anything older is a
+    hole and refetches (the provider returns full history, so the refill costs
+    one call). Weekends/holidays need no special-casing — NIFTY has no bar for
+    them either, so Friday's tail is fresh on Saturday morning and stale by
+    Monday evening, exactly like it should be. Settled = not today while the
+    clock is before 16:15 IST: today-stamped bars are intraday snapshots and
+    always refetch (round-6 live: a 14:14 dry run froze mid-session closes)."""
     first, last, n = _history_shape(store, symbol)
     if n == 0 or not last:
         return False
-    if int(np.busday_count(pd.Timestamp(last).date(), today)) > fresh_bdays:
-        return False
-    # A bar stored FOR TODAY (or, before 16:15 IST, for yesterday) is not a
-    # settled tail: the session may still be running and the stored row is then
-    # an intraday snapshot. Fetching again tops it up to the real close. Without
-    # this, one run during market hours froze that day's bar forever (round-6
-    # live: a 14:14 IST dry run stored 2026-11-11 bars mid-session and every
-    # later run skipped the symbol as "fresh").
     now = datetime.now(IST)
-    settled_cutoff = now.date() if (now.hour, now.minute) < (16, 15) else now.date() - timedelta(days=1)
-    if pd.Timestamp(last).date() > settled_cutoff:
-        return False
+    expected = _expected_session(store, now)
+    if expected is None:
+        # No NIFTY calendar stored (bootstrap run): strictness requires proof, so
+        # the LEGACY tolerance governs here — busday gap within fresh_bdays and
+        # no unsettled today-stamp. The calendar rule takes over the moment the
+        # index has bars; until then we are as lenient as the old code and say
+        # nothing louder than "bootstrap".
+        import numpy as np
+
+        if int(np.busday_count(pd.Timestamp(last).date(), today)) > fresh_bdays:
+            return False
+        settled_cutoff = (now.date() if (now.hour, now.minute) < (16, 15)
+                          else now.date() - timedelta(days=1))
+        if pd.Timestamp(last).date() > settled_cutoff:
+            return False
+    elif pd.Timestamp(last).date() < expected:
+        return False  # calendar-confirmed hole of ANY size -> refetch and heal
     if first is None:
         return False
     if (pd.Timestamp(first).date() - pd.Timestamp(start).date()).days <= 45:
         return True
     return n >= NEW_LISTING_MIN_ROWS
+
+
+NEW_LISTING_MIN_ROWS = 60  # ~3 months of dailies: shallow-but-current is suspect
+
+
+def _expected_session(store: BarStore, now: datetime) -> date | None:
+    """The session date a complete tail should carry: the latest SETTLED session
+    NIFTY's own stored bars confirm. None with no stored NIFTY bars — the caller
+    must then fall back, never assume."""
+    row = store.con.execute(
+        "SELECT max(d) FROM candles WHERE symbol='NIFTY' AND tf='daily'").fetchone()
+    if not row or not row[0]:
+        return None
+    cutoff = now.date() - timedelta(days=1) if (now.hour, now.minute) < (16, 15) else now.date()
+    return min(pd.Timestamp(row[0]).date(), cutoff)
 
 
 def fetch_universe(symbols: list[str], store: BarStore | None = None, providers: list[DataSource] | None = None,

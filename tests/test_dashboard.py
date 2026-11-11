@@ -13,6 +13,18 @@ from indtrader.models import OrderPlan
 from indtrader.web.dashboard import make_handler, snapshot
 
 
+def _last_settled():
+    """Latest weekday strictly before today — fixtures anchor HERE so the suite
+    stops date-rotting (a fixture ending on a hardcoded date turns the honest
+    STALE banner into a false test failure days later)."""
+    from datetime import date, timedelta
+
+    d = date.today() - timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d.isoformat()
+
+
 @pytest.fixture
 def seeded(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
@@ -21,7 +33,7 @@ def seeded(tmp_path, monkeypatch):
     get_settings.cache_clear()
     store = BarStore(tmp_path / "bars.sqlite")
     log = PlanLog(tmp_path / "plans.sqlite")
-    days = pd.date_range("2026-10-01", periods=25, freq="B")
+    days = pd.bdate_range(end=_last_settled(), periods=25, freq="B")
     store.upsert_candles("NIFTY", "daily",
                          pd.DataFrame({"open": 25000, "high": 25100, "low": 24900,
                                        "close": range(25000, 25025), "volume": 1e6}, index=days), "test")
@@ -93,7 +105,11 @@ def test_ledger_sections_and_heatmap(seeded):
     store, log = seeded
     import numpy as np
 
-    days = pd.date_range("2026-10-01", periods=25, freq="B")
+    # anchor to the live calendar: CLIFFD's tail sits TWO sessions behind the
+    # fixture's last NIFTY session, so the heat grid must name those holes
+    # (the old hardcoded 2026-10 anchor date-rotted within a week).
+    end2 = pd.bdate_range(end=pd.Timestamp(_last_settled()), periods=3)[0]
+    days = pd.bdate_range(end=end2, periods=25)
     closes = np.array([100.0] * 12 + [50.0] * 13)          # −50% cliff, no factor -> gap
     store.upsert_candles("CLIFFD", "daily",
                          pd.DataFrame({"open": closes, "high": closes, "low": closes,
@@ -105,8 +121,11 @@ def test_ledger_sections_and_heatmap(seeded):
     from indtrader.data.macrocal import ensure as cal_ensure
 
     cal_ensure(store)
-    store.con.execute("INSERT INTO calendar_events VALUES ('2026-10-05','master',0,'fake drift','{}','now')")
-    store.con.execute("INSERT INTO calendar_events VALUES ('2026-11-06','master',0,'real holiday','{}','now')")
+    # dispute = holiday row on a day WITH a NIFTY bar (fixture's own last session);
+    # genuine = a future weekday no bar can exist for. Both date-independent.
+    store.con.execute("INSERT INTO calendar_events VALUES (?,'master',0,'fake drift','{}','now')",
+                      [_last_settled()])
+    store.con.execute("INSERT INTO calendar_events VALUES ('2099-01-05','master',0,'real holiday','{}','now')")
     store.con.commit()
     from indtrader.data.news import store_news
 
@@ -117,13 +136,16 @@ def test_ledger_sections_and_heatmap(seeded):
     snap = snapshot(store, log, ["TATA", "CLIFFD"])
     assert [r[0] for r in snap["split_gaps"]] == ["CLIFFD"] and "-50%" in snap["split_gaps"][0][1]
     assert snap["unresolved_ca"] == [["CLIFFD", "2026-10-06", "Bonus Issue"]]   # dividend NOT flagged
-    assert "2026-10-05" in snap["holidays"]["disputed"]                          # holiday WITH a NIFTY bar
-    assert "2026-11-06" not in snap["holidays"]["disputed"]                      # no bar = genuine, stays out
+    assert _last_settled() in snap["holidays"]["disputed"]                       # holiday WITH a NIFTY bar
+    assert "2099-01-05" not in snap["holidays"]["disputed"]                      # no bar = genuine, stays out
     assert snap["news"] and "downgrade" in snap["news"][0][2].lower()            # AMBER triage applied
     assert all("flat" not in r[2] for r in snap["news"])                         # quiet headline not flagged
     heat = {r[0]: r[1] for r in snap["heat"]["rows"]}
     assert heat["TATA"] and all(v == "fresh" for v in heat["TATA"].values())
-    assert heat["CLIFFD"] and all(v == "fresh" for v in heat["CLIFFD"].values())
+    # CLIFFD's tail sits 2 sessions behind the calendar: the newest sessions must
+    # read "missing" there — the grid's whole purpose is naming holes, not all-green.
+    assert heat["CLIFFD"][_last_settled()] == "missing"
+    assert heat["CLIFFD"][str(end2.date())] == "fresh"
     assert any(r[0] == "clean-day streak" and "not persisted" in r[1] for r in snap["etl"])
 
 

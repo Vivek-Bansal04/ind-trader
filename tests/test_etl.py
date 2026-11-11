@@ -154,6 +154,20 @@ def last_settled_session() -> str:
     return d.isoformat()
 
 
+def open_store(tmp_path):
+    """No BarStore() default path here — a missing DATA_DIR would silently create
+    ~/.indtrader/bars.sqlite during tests."""
+    from indtrader.data.store import BarStore
+
+    return BarStore(tmp_path / "b.sqlite")
+
+
+def seed_nifty(store, last=None):
+    """Calendar anchor for the freshness rule: NIFTY sessions 2025-01-02 -> `last`
+    (default: the latest settled weekday)."""
+    seed(store, "NIFTY", "2025-01-02", last or last_settled_session())
+
+
 def run(tmp_path, symbols, skip_fresh, fresh_bdays=3):
     from indtrader.data.store import BarStore
     from indtrader.scheduler.etl import fetch_universe
@@ -187,6 +201,46 @@ def test_stale_tail_refetches_even_when_deep(tmp_path):
     store.close()
     _, prov = run(tmp_path, ["OLD"], skip_fresh=True)
     assert prov.calls == 1
+
+
+# ---- round-8: missed-evening hole healing (calendar-anchored freshness) ---------
+
+def test_missed_two_evenings_heal_on_next_run(tmp_path):
+    """The user's exact question: laptop off Mon+Tue, opened Wed. The store's
+    NIFTY bars are the exchange calendar — a symbol whose tail sits TWO sessions
+    behind it is a hole of any size and must refetch. The old busday<=3 rule
+    called this 'fresh' and left the hole until Thursday."""
+    store = open_store(tmp_path)
+    seed_nifty(store)                                     # calendar current to settled session
+    back2 = pd.bdate_range(end=last_settled_session(), periods=3)[0]
+    seed(store, "GAPSYM", "2015-01-05", str(back2.date()))  # 2 sessions behind
+    store.close()
+    _, prov = run(tmp_path, ["GAPSYM"], skip_fresh=True)
+    assert prov.calls == 1                               # healed, not skipped
+
+
+def test_one_session_behind_also_refetches(tmp_path):
+    """Old rule's other hole: a single missed evening stayed 'fresh' for days."""
+    store = open_store(tmp_path)
+    seed_nifty(store)
+    back1 = pd.bdate_range(end=last_settled_session(), periods=2)[0]
+    seed(store, "HOLE1", "2015-01-05", str(back1.date()))
+    store.close()
+    _, prov = run(tmp_path, ["HOLE1"], skip_fresh=True)
+    assert prov.calls == 1
+
+
+def test_calendar_current_symbol_still_skipped(tmp_path, capsys):
+    """The other side: tail ON the calendar's latest settled session = genuinely
+    complete -> provider untouched (the whole point of skip_fresh stays true)."""
+    store = open_store(tmp_path)
+    seed_nifty(store)
+    seed(store, "DONE", "2015-01-05", last_settled_session())
+    store.close()
+    res, prov = run(tmp_path, ["DONE"], skip_fresh=True)
+    assert prov.calls == 0
+    assert res["DONE"] is None
+    assert "skipped" in capsys.readouterr().out
 
 
 def test_fresh_but_shallow_series_still_fetches(tmp_path, capsys):

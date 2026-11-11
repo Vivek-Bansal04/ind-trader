@@ -2,8 +2,9 @@
 
 Purpose: a complete, honest specification of every decision rule in the system,
 for review by a stronger model than the one that wrote it. Every constant here
-was read from the code at commit `7f1701e` (2026-11-12); file paths point at
-the implementation. The final section lists the questions we most want challenged.
+was read from the code, not from memory (2026-11-12; §1 includes the round-8
+calendar-anchored freshness fix). File paths point at the implementation. The
+final section lists the questions we most want challenged.
 
 Scope rules that constrain everything: daily bars only, long-only, delivery
 (CNC), no leverage/F&O/intraday, no order placement anywhere. All formulas run
@@ -17,13 +18,28 @@ on **raw close prices adjusted by the factor layer in §2** unless stated.
   provider is recorded per symbol (`provenance` column on stored candles).
 - **Freshness skip rule** (`_is_complete_and_fresh`, nightly loop only):
   skip symbol iff ALL hold:
-  1. `busday_count(last_bar, today) ≤ 3` (`fresh_bdays=3`);
-  2. last bar is **settled**: last_bar ≤ today (before 16:15 IST also yesterday
-     is unsettled) — a bar stamped for a live session always refetches (round-6
-     froze 2026-11-11 bars at 14:14 IST intraday values);
-  3. first bar ≤ start+45 days (default history start 2015-01-01) **or** a
+  1. **Calendar-anchored tail**: the last bar sits ON
+     `expected = min(max(NIFTY daily bar date), settled_cutoff)`, where
+     `settled_cutoff` = today after 16:15 IST, else yesterday. Any calendar-
+     confirmed hole of *any* size refetches — the provider returns full history,
+     so a refill costs one call. Weekends/holidays need no special case: NIFTY
+     has no bar for them either, so Friday's tail is fresh Saturday morning and
+     stale by Monday evening. Round-6 live: a 14:14 dry run froze 2026-11-11
+     bars at intraday values — hence the settled cutoff, so a today-stamped bar
+     always refetches before 16:15.
+     *Bootstrap fallback* (only when NIFTY itself has no stored bars, so
+     `expected` is None): the legacy lenient rule, `busday_count(last_bar,
+     today) ≤ fresh_bdays` (default 3) plus the settled-cutoff check. Kept
+     narrow on purpose — it is the only path where a 1–2 session hole can be
+     called fresh, and it disappears after the index's first successful fetch.
+  2. first bar ≤ start+45 days (default history start 2015-01-01) **or** a
      genuine new listing: first bar > start AND ≥ 60 rows
      (`NEW_LISTING_MIN_ROWS`, ~3 months; shallow-but-current is suspect).
+  Round-8 correction: rule 1 replaced `busday_count ≤ 3` as the primary test.
+  That constant is a weekend/holiday tolerance, so the old rule called a
+  1–2-session hole "fresh" — two missed evenings stayed unfilled until a third
+  day's run, and self-healing was an accident of the gap outgrowing the
+  constant. `fresh_bdays` now only governs the bootstrap fallback.
 - Result map semantics: `None` = skipped fresh, `0` = fetched-but-empty (loud),
   `>0` = rows stored. The nightly line prints all three separately (collapsing
   None/0 produced the false "EMPTY: all 499" alarm).
