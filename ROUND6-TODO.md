@@ -2,8 +2,10 @@
 # scale, and three real problems surfaced (run_once timeout, news 403, split
 # factors missing). This round validates the fixes for all three.
 
-Code changes pulled this round (pushed as `0ad6156` — your pull must include
-it or STOP):
+Code changes pulled this round (pushed as `0ad6156` + `b7b86af` — your pull
+must include BOTH or STOP; `b7b86af` fixes the split-factor math in the
+085dc19 work: no double-counting, one ratio convention, unresolved splits
+named instead of silently skipped):
 
 - `etl`: new-listing freshness — symbols listed after `--start` with >= 60
   bars and a current tail now count as fresh (that was the 120s+ timeout).
@@ -23,7 +25,7 @@ Start with:
 ```bash
 cd ~/Desktop/ind-trader
 git pull
-git log --oneline -1   # must be 0ad6156 or newer
+git log --oneline -2   # must include b7b86af
 ```
 
 ---
@@ -93,6 +95,19 @@ If ANY line shows rows, the `--from-raw` command replays the parser over it.
 If EVERY line is empty/error — that whole list is still the answer: it means
 the installed lib can't reach corporate actions at all and we pick another
 source (no more knocking on this door).
+
+If any line PARSES, the events + split factors land in the store; then re-run
+health — its SPLIT-GAP now measures the MERGED factors, so HDFCBANK should
+drop off the named list (59 -> 58 would prove the whole chain works):
+
+```bash
+.venv/bin/python -m indtrader.cli health --file data/universe.txt | tail -8
+```
+
+>>> PASTE 4b — the health tail after the probe (expect HDFCBANK gone from SPLIT-GAP):
+```
+...paste...
+```
 
 >>> PASTE 4 — both outputs, complete:
 ```
