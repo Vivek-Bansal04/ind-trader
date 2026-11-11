@@ -39,7 +39,7 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `riskreport` | Weekly report: regime light + flip/FTD note, book XIRR + concentration, journal counts, universe data health |
 | `health` | Data-health gate vs the NIFTY session calendar: rows, gaps, staleness, adj coverage; exit 1 on breaches. Plus the split-gap check: every ±35% raw move must have a matching factor step — `adj_coverage=100%` can no longer hide an unadjusted split cliff (round-4 HDFCBANK lie) |
 | `contract-test` | Phase-1 acceptance: store closes vs NSE's own bhavcopy (`TckrSymb`/`ClsPric` contract, captured live — never guessed); names every mismatch, exit 1 on any |
-| `holidays` | NSE CBM trading-holiday calendar + cross-check that no holiday has a NIFTY bar |
+| `holidays [--refresh-calendar]` | NSE CBM trading-holiday calendar + cross-check that no holiday has a NIFTY bar. `--refresh-calendar` also stores the exchange holiday master (offline drift ledger: `disputed_dates` = exchange-holiday dates that have bars, re-computable any time) |
 | `fetch-adj` | Store corporate-action factors (yfinance Adj Close/Close); `backtest --adjusted` uses them, warns on RAW fallback |
 | `ann` | Announcement triage for HOLDINGS only: RED (fraud/pledge-encroachment/NCLT…) vs AMBER keywords; empty book = empty alert, never a firehose |
 | `events [SYM --qty N]` | Results calendar + the plan's event rule: no fresh entry ≤2 sessions before earnings, half size ≤5; unknown date = guard off, stated |
@@ -53,8 +53,8 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `decay SYM --strategy X` | Paper trades vs the strategy's own bootstrap band (p5/p95 + rolling windows); thin baseline refuses to judge; a breach prints REVIEW — a human decides |
 | `import-csv FILE [--format f] [--map ...]` | Broker tradebook seeding: contract-first parse, bad row aborts naming the row, re-runs dedup, NOTHING writes without `--apply` |
 | `shareholding [SYM] [--fetch\|--set ...]` | QoQ ownership deltas (promoter −2% / FII exit / pledge ↑). Live side parses the round-4-CONFIRMED quarterly-pattern shape (promoter/public only — FII/DII/pledge aren't in that payload and stay NULL, never zeroed); unknown shapes still refuse loudly |
-| `coractions SYM` | Probe-only corporate-actions fetch (the split-factor cure): stores raw payload + prints row keys; parse refuses until the shape is confirmed live |
-| `news [SYMS] [--no-fetch] [--days]` | External news (Google News RSS, stdlib, no key) for holdings + MARKET — triaged with the SAME RED/AMBER vocabulary as `ann`, so a headline can't invent a new category. A dead feed prints as an outage, never as a quiet evening; tests are offline |
+| `coractions SYM [--from-raw]` | Probe-only corporate-actions fetch (the split-factor cure). v2 probes EVERY corporate-actions-ish method/arg-form and prints each call's payload shape — round-5's single `[]` answer proved nothing. `--from-raw` replays the confirmed-shape parser over stored payloads, offline |
+| `news [SYMS] [--no-fetch] [--days]` | External news (Google News RSS, no key) for holdings + MARKET — triaged with the SAME RED/AMBER vocabulary as `ann`, so a headline can't invent a new category. Transport is `data.http` (curl_cffi impersonation where present: the round-5 laptop 403'd plain urllib) and the fetch line names which transport ran. A dead feed prints as an outage, never as a quiet evening; tests are offline |
 | `backup [--keep N]` / `restore KIND FILE` | Sqlite online backup (safe mid-ETL) + `PRAGMA integrity_check` on every copy; restore refuses corrupt backups, keeps `.pre-restore` |
 | `dashboard [--port 8765]` | Read-only one-page web UI on 127.0.0.1: banner (NIFTY + staleness + PAUSED), book vs plans, open plans, last scan, journal gaps, health strip. Stdlib only, zero write paths |
 | `universe --index "nifty 50" --out data/universe.txt` | Dump live index constituents to a universe file |

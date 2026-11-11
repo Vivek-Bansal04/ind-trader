@@ -13,14 +13,13 @@ Query templates live in one dict — a blocked or reshaped feed is one edit ther
 """
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import date, timedelta
 from urllib.parse import quote
 
 from indtrader.data.announce import Match, triage_title
+from indtrader.data.http import transport as http_transport
+from indtrader.data.http import http_get
 from indtrader.data.store import BarStore
 
 NEWS_SCHEMA = """
@@ -29,9 +28,6 @@ CREATE TABLE IF NOT EXISTS news_seen(
     symbol TEXT, title TEXT, d TEXT, source TEXT, fetched_on TEXT
 );
 """
-
-UA = "Mozilla/5.0 (compatible; ind-trader/0.1; personal research)"
-TIMEOUT_S = 15
 
 # query key -> Google News RSS search. {sym} substituted per symbol; MARKET = macro.
 QUERY_TPL = 'https://news.google.com/rss/search?q={q}&hl=en-IN&gl=IN&ceid=IN:en'
@@ -44,14 +40,13 @@ def fetch_feed(url: str) -> tuple[list[dict], int, str | None]:
     """One feed -> ([{title, link, pubDate}], skipped_count, error|None). All
     three parts matter: 0 items + error None is a genuinely quiet day; 0 + error
     is an OUTAGE, and callers must not read the outage as calm. `skipped` counts
-    rows we refused to parse — never dropped silently."""
-    req = urllib.request.Request(url, headers={"User-Agent": UA,
-                                               "Accept": "application/rss+xml, application/xml"})
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
-            body = r.read()
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
-        return [], 0, f"{type(e).__name__}: {str(e)[:120]}"
+    rows we refused to parse — never dropped silently. Transport lives in
+    data.http: round-5 live showed this laptop's WAF rejects plain urllib, and
+    curl_cffi's Chrome impersonation is the route confirmed working there."""
+    body, err = http_get(url, referer="https://news.google.com/",
+                         accept="application/rss+xml, application/xml")
+    if err:
+        return [], 0, err
     try:
         root = ET.fromstring(body)
     except ET.ParseError as e:
@@ -102,6 +97,7 @@ def fetch_news(symbols: list[str], store: BarStore) -> dict:
             continue
         stored += store_news(store, sym, items, "gnews")
     return {"ok": not (len(unreachable) + len(failed) == len(queries)),
+            "transport": http_transport(),
             "stored_new": stored, "queries": len(queries), "skipped_rows": skipped,
             "unreachable": unreachable, "failed": failed}
 

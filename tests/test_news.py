@@ -24,47 +24,25 @@ def store(tmp_path):
 
 
 # ---- fetch_feed: parsing AND honest failure shapes ---------------------------------
+# seam is news.http_get (transport moved to data.http in round 5: the laptop's
+# WAF needs curl_cffi impersonation — the fetch layer must not pin the transport)
 
 def test_fetch_feed_parses_items_and_counts_skips(monkeypatch):
-    class FakeResp:
-        def read(self):
-            return RSS_FIXTURE.encode()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    monkeypatch.setattr(news.urllib.request, "urlopen", lambda req, timeout=None: FakeResp())
+    monkeypatch.setattr(news, "http_get", lambda url, **kw: (RSS_FIXTURE.encode(), None))
     items, skipped, err = news.fetch_feed("http://anything")
     assert err is None and skipped == 1           # the linkless row, COUNTED
     assert [i["title"][:4] for i in items] == ["Acme", "Acme", "Cric"]
 
 
 def test_fetch_feed_network_error_is_reported_not_empty(monkeypatch):
-    import urllib.error
-
-    def boom(req, timeout=None):
-        raise urllib.error.URLError("403: office proxy")
-
-    monkeypatch.setattr(news.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(news, "http_get",
+                        lambda url, **kw: (None, "HTTPError: HTTP 403"))
     items, skipped, err = news.fetch_feed("http://anything")
-    assert items == [] and err and "URLError" in err   # outage, never a quiet zero
+    assert items == [] and err and "403" in err   # outage, never a quiet zero
 
 
 def test_fetch_feed_malformed_xml_reports_parse_error(monkeypatch):
-    class FakeResp:
-        def read(self):
-            return b"<rss><broken"
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *a):
-            return False
-
-    monkeypatch.setattr(news.urllib.request, "urlopen", lambda req, timeout=None: FakeResp())
+    monkeypatch.setattr(news, "http_get", lambda url, **kw: (b"<rss><broken", None))
     items, skipped, err = news.fetch_feed("http://anything")
     assert items == [] and "ParseError" in err
 

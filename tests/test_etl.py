@@ -178,15 +178,32 @@ def test_stale_tail_refetches_even_when_deep(tmp_path):
 
 
 def test_fresh_but_shallow_series_still_fetches(tmp_path):
-    """The trap this guard exists for: a fresh-tailed series starting years after
-    --start is NOT done — declaring it skipped would quietly fake a long backtest."""
+    """The trap this guard exists for: a fresh-tailed series with barely any
+    history is NOT done — declaring it skipped would quietly fake a long
+    backtest. (Round-5 correction: "shallow" means <60 bars, not "starts after
+    2015" — a 2024 listing with a real tail can never reach back to --start.)"""
     from indtrader.data.store import BarStore
 
     store = BarStore(tmp_path / "b.sqlite")
-    seed(store, "SHALLOW", "2024-01-01", str(pd.Timestamp.today().date()))
+    seed(store, "SHALLOW", "2026-10-05", str(pd.Timestamp.today().date()))  # ~26 bars
     store.close()
     _, prov = run(tmp_path, ["SHALLOW"], skip_fresh=True)
     assert prov.calls == 1
+
+
+def test_new_listing_with_real_tail_is_skipped(tmp_path, capsys):
+    """Round-5 live finding: ~193/499 symbols listed after 2015 failed the old
+    both-prongs rule EVERY night, so run_once blew past 2 minutes re-fetching
+    history that cannot exist (pre-listing). New listing + >=60 bars + current
+    tail = complete; the nightly loop must skip it."""
+    from indtrader.data.store import BarStore
+
+    store = BarStore(tmp_path / "b.sqlite")
+    seed(store, "NEWLIST", "2024-06-03", str(pd.Timestamp.today().date()))  # 600+ bars
+    store.close()
+    _, prov = run(tmp_path, ["NEWLIST"], skip_fresh=True)
+    assert prov.calls == 0
+    assert "skipped" in capsys.readouterr().out
 
 
 def test_skip_fresh_default_off_explicit_fetch_always_fetches(tmp_path):

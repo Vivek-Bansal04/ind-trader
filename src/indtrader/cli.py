@@ -266,6 +266,11 @@ def cmd_holidays(args) -> int:
             n.close()
     store = BarStore()
     try:
+        from indtrader.data import macrocal
+
+        macrocal.store_cbm(store, hol)  # store the CBM view too: evidence + offline re-runs
+        if getattr(args, "refresh_calendar", False):
+            print(f"[holidays] holiday master: {macrocal.fetch_calendar(store)}")
         idx = store.load(args.index)
         print(f"{year}: {len(hol)} CBM trading holidays "
               f"({min(hol)} .. {max(hol)})" if hol else f"{year}: no holidays parsed?!")
@@ -324,6 +329,17 @@ def cmd_holidays(args) -> int:
             if hits:
                 print("holiday with STOCK bars but no index bar (contaminated):",
                       ", ".join(f"{d} [{c} symbols]" for d, c in hits))
+        # Holiday master in the store (round-5 disputed dates): the drift ledger,
+        # re-computable OFFLINE. Same-source caveat is in macrocal's docstring —
+        # this is the exchange's words kept as evidence, not a second opinion.
+        cov = macrocal.calendar_status(store)
+        if not cov:
+            print("holiday master not stored — run `holidays --refresh-calendar` to keep "
+                  "the exchange list in the store for offline re-checks")
+        else:
+            disp = macrocal.disputed_dates(store)
+            print(f"holiday master stored {cov[0]}..{cov[1]} — exchange-holiday dates that "
+                  f"have a NIFTY bar (drift ledger): {disp or 'none'}")
         return 0
     finally:
         store.close()
@@ -784,18 +800,35 @@ def cmd_shareholding(args) -> int:
 
 
 def cmd_coractions(args) -> int:
-    """Probe-only corporate-actions fetch (the split-factor cure, round-5 probe):
-    stores the raw payload + prints row keys; parse refuses until shape confirmed."""
-    from indtrader.data.nseapi_provider import NseIndiaApiProvider
-
-    if not NseIndiaApiProvider.available():
-        print("coractions needs the nse lib (pip install 'indtrader[nse]') — run on the laptop",
-              file=sys.stderr)
-        return 2
+    """Probe-only corporate-actions fetch (the split-factor cure). v2 probes EVERY
+    corporate-actions-ish method/arg-form and prints a shape inventory (round-5's
+    single payload was an empty list — one shape proved nothing). --from-raw replays
+    the confirmed-shape parser over stored payloads: zero network."""
     from indtrader.research import coractions as ca
 
     store = BarStore()
     try:
+        if args.from_raw:
+            outs = []
+            for fetched_on, method, payload in ca.raw_payloads(store, args.symbol):
+                try:
+                    events = ca.parse_events(args.symbol, payload)
+                    note = f"{len(events)} events ({sum(1 for e in events if ca.is_split_kind(e['kind']))} split/bonus)"
+                except (KeyError, ValueError) as e:
+                    note = f"parse REFUSED: {e}"
+                outs.append({"fetched_on": fetched_on, "method": method, "result": note})
+            if not outs:
+                print(f"no stored corporate-actions payloads for {args.symbol.upper()} — "
+                      f"run the probe first (no --from-raw)", file=sys.stderr)
+                return 1
+            print(json.dumps(outs, indent=1, default=str))
+            return 0
+        from indtrader.data.nseapi_provider import NseIndiaApiProvider
+
+        if not NseIndiaApiProvider.available():
+            print("coractions needs the nse lib (pip install 'indtrader[nse]') — run on the laptop",
+                  file=sys.stderr)
+            return 2
         out = ca.try_fetch(store, args.symbol)
         print(json.dumps(out, indent=1, default=str))
         return 0 if out["ok"] else 1
@@ -1183,8 +1216,8 @@ def cmd_news(args) -> int:
         if not args.no_fetch:
             # fetch symbols named on the command line; none named -> the book's holdings
             res = news.fetch_news(fetch_syms or held, store)
-            print(f"[news] fetch: stored_new={res['stored_new']} queries={res['queries']} "
-                  f"skipped_rows={res['skipped_rows']}")
+            print(f"[news] fetch: transport={res['transport']} stored_new={res['stored_new']} "
+                  f"queries={res['queries']} skipped_rows={res['skipped_rows']}")
             for bad in res["unreachable"] + res["failed"]:
                 print(f"[news] feed problem: {bad}")
             if not res["ok"]:
@@ -1445,6 +1478,8 @@ def main(argv=None) -> int:
     s = sub.add_parser("coractions",
                        help="probe corporate actions (split factors) - raw stored, parse awaits shape")
     s.add_argument("symbol")
+    s.add_argument("--from-raw", dest="from_raw", action="store_true",
+                   help="offline: replay the confirmed-shape parser over stored payloads (no network)")
     s.set_defaults(fn=cmd_coractions)
     s = sub.add_parser("backup", help="online-backup bars+plans, integrity-check, prune to --keep")
     s.add_argument("--dest", default=None)
@@ -1481,6 +1516,8 @@ def main(argv=None) -> int:
     s = sub.add_parser("holidays", help="NSE CBM trading-holiday calendar + cross-check vs NIFTY bars")
     s.add_argument("--year", type=int, default=None)
     s.add_argument("--index", default="NIFTY")
+    s.add_argument("--refresh-calendar", dest="refresh_calendar", action="store_true",
+                   help="fetch the NSE holiday master into the store (offline drift ledger)")
     s.set_defaults(fn=cmd_holidays)
     s = sub.add_parser("notify"); s.set_defaults(fn=cmd_notify)
     s = sub.add_parser("bot", help="Telegram command interface (long-poll; reads + journal only)")

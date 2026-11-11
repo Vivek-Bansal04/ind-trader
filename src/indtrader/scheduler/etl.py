@@ -69,18 +69,27 @@ def _history_shape(store: BarStore, symbol: str) -> tuple[str | None, str | None
 
 def _is_complete_and_fresh(store: BarStore, symbol: str, start: str,
                            fresh_bdays: int, today: date) -> bool:
-    """Skip candidate: tail within fresh_bdays business days of today AND history
-    reaching back to ~start (so a fresh-tailed but shallow series is refetched,
-    not declared done). Missing on either side -> False -> fetch."""
+    """Skip candidate: tail within fresh_bdays business days of today AND (history
+    reaching back to ~start OR a genuine new listing: first bar after start with a
+    real current tail). Round-5 live: ~193 of 499 symbols listed after 2015 failed
+    the old both-prongs rule every single night — a re-fetch can't invent bars
+    before their listing, so run_once blew past 2 minutes for nothing. A shallow
+    series (fewer than NEW_LISTING_MIN_ROWS bars) is still refetched — the
+    'quietly shortened series' guard stays for everything a re-fetch could fix."""
     import numpy as np
+
+    NEW_LISTING_MIN_ROWS = 60  # ~3 months of dailies: shallow-but-current is suspect
 
     first, last, n = _history_shape(store, symbol)
     if n == 0 or not last:
         return False
     if int(np.busday_count(pd.Timestamp(last).date(), today)) > fresh_bdays:
         return False
-    return first is not None and (pd.Timestamp(first).date()
-                                  - pd.Timestamp(start).date()).days <= 45
+    if first is None:
+        return False
+    if (pd.Timestamp(first).date() - pd.Timestamp(start).date()).days <= 45:
+        return True
+    return n >= NEW_LISTING_MIN_ROWS
 
 
 def fetch_universe(symbols: list[str], store: BarStore | None = None, providers: list[DataSource] | None = None,
@@ -88,10 +97,12 @@ def fetch_universe(symbols: list[str], store: BarStore | None = None, providers:
                    skip_fresh: bool = False, fresh_bdays: int = 3,
                    max_workers: int = 5) -> dict[str, int]:
     """Fetch (or top up) each symbol. skip_fresh=True makes the nightly loop and a
-    resumed backfill cheap: a symbol whose tail is current AND whose history
-    reaches ~start is skipped outright. Both conditions required — 'fresh tail'
-    alone would declare a shallow series done, and that's the kind of quiet
-    shortening that fakes a backtest. Default off: an explicit `fetch` always fetches."""
+    resumed backfill cheap: a symbol is skipped when its tail is current AND it
+    either reaches ~start or is a genuine new listing (first bar after start with
+    >= 60 bars — re-fetching cannot fill pre-listing history). Both conditions
+    required for the old-world case — 'fresh tail' alone would declare a shallow
+    series done, and that's the kind of quiet shortening that fakes a backtest.
+    Default off: an explicit `fetch` always fetches."""
     providers = providers or build_providers(get_settings())
     store = store or BarStore()
     results: dict[str, int] = {}
