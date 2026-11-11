@@ -201,6 +201,7 @@ def cmd_contract_test(args) -> int:
     syms = load_universe(args.file) if args.file else load_universe(None)
     store = BarStore()
     try:
+        from datetime import date
         session = args.date or max(
             (str(store.last_date(s))[:10] for s in set(syms) if store.last_date(s) is not None),
             default=None)
