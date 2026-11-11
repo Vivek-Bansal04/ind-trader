@@ -5,6 +5,9 @@ Daily/weekly bars only — signals on closed bars, decisions in the evening, exe
 next morning by hand, CNC/delivery only. **No intraday, no scalping, no F&O, no
 leverage — there is no code path to any of them.**
 
+New here? [`layman-readme.md`](layman-readme.md) explains what this is, how a day
+with it works, and when real money makes sense — no jargon, no code.
+
 Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositories
 (including every fork on this profile). Every design choice is attributable — see
 [Provenance](#provenance--what-came-from-where) below and `docs/ARCHITECTURE.md`.
