@@ -1,20 +1,25 @@
-"""Corporate actions (splits/bonuses/dividends) — probe-only until shape confirmed.
+"""Corporate actions (splits/bonuses/dividends) — the split-factor cure.
 
 WHY this module exists: round-4 live proved yfinance adjustment factors are
 dividend-only — the HDFCBANK 1:2 split cliff survives `adjusted=True`, and the
-round-5 split-gap check named 59 such symbols. The cure needs a real split
-source; NSE's own corporate-action records are it.
+round-5 split-gap check named 59 such symbols. NSE's own corporate-action
+records are the split source; store.combined_factors merges the two feeds.
 
-Probe v2 (after round-5): the first probe called `actions` and got an EMPTY
-list — "payload is not a row list (got list)" literally means `[]`, and a round
-of guessing one payload was the bug, not the discipline. So the probe now tries
-EVERY corporate-actions-ish method with EVERY cheap argument form, stores each
-non-empty payload RAW (with a replay path: `coractions SYM --from-raw`), and
-prints a per-call shape report — row_keys for dicts, or `list of <X>` /
-`empty list` when there are no dict rows to learn from. parse_events accepts
-ONLY the confirmed-row shape (round-5's pattern-row spelling); every other
-shape refuses loudly. When the paste lands, only the key names change — the
-refusal logic never does.
+Probe discipline (round-5 lesson): the first probe's single `actions()` answer
+was an EMPTY list — one payload was too thin to build on, so try_fetch probes
+EVERY corporate-actions-ish method with EVERY plausible argument form (the
+laptop's claimed `option_type="equities"` form is tried FIRST, then the old
+forms as fallback, and even TypeErrors are REPORTED — a signature guess that
+fails must be visible, not silently skipped). Each non-empty payload is stored
+RAW; parse_events accepts only confirmed row keys and otherwise refuses,
+naming both what it tried and what it saw.
+
+Ratio convention (round-5 review): ONE rule, the min:max reading — a split
+into more pieces always reduces price (1:2 split -> 0.5, bonus 1:1 -> 0.5,
+face value 10->2 -> 0.2). The first version mixed split=b/a with
+face-value=a/b into one cumprod, which silently un-adjusts one branch. No
+usable numbers -> None -> reported as UNRESOLVED, never a silent no-op: the
+split-gap health check will keep naming the symbol until a ratio lands.
 """
 from __future__ import annotations
 
@@ -31,61 +36,13 @@ CREATE TABLE IF NOT EXISTS corporate_actions_raw(
 
 # Confirmed-row keys live HERE once seen live; until then parse refuses.
 # Round-4's shareholding lesson: NSE pattern rows spell dates "17-Nov-2025" and
-# purposes as free text ("Split of shares"); those spellings are *candidates*
+# purposes as free text ("Split of shares 1:2"); those spellings are *candidates*
 # until this endpoint's own payload says so.
 CA_KEY_CANDS = {
     "date": ("date", "exDate", "EX_Date", "recordDate", "crsDate", "from"),
     "type": ("purpose", "compulsory", "desc", "subject", "type"),
     "ratio": ("ratio", "crsRatio", "crsRatioTo", "faceValueChange", "splitRatio"),
 }
-
-
-def _split_ratio(subject: str) -> float | None:
-    """Guess split/bonus ratio from subject text.
-
-    Returns the STORED FACTOR (1 / price_multiplier), for forward-fill +
-    cumulative product in combined_factors():
-      - 1:2 split -> 2.0 (price halves → stored factor 2.0)
-      - Bonus 1:1 -> 2.0 (shares double → stored factor 2.0)
-      - Face value 2→1 -> 2.0 (shares double → stored factor 2.0)
-      - dividend -> None
-    """
-    s = subject.lower()
-    import re
-
-    is_bonus = "bonus" in s
-    is_split_or_fv = bool(re.search(r'\b(split|sub\.?div|face\s*val|fv)\b', s))
-
-    if not (is_bonus or is_split_or_fv):
-        return None
-
-    # Split/bonus ratio: "Bonus 1:1", "Stock Split 2:1", "1:2"
-    m = re.search(r'(\d+)\s*[:]\s*(\d+)', s)
-    if m:
-        a, b = int(m.group(1)), int(m.group(2))
-        if is_bonus:
-            # Bonus X:Y: for every X shares, get Y new → total X+Y → price × X/(X+Y)
-            # stored factor = (X+Y)/X  (even when X==Y, shares double)
-            return round((a + b) / a, 6)
-        else:
-            # Split X:Y: a old shares become b new → price × a/b
-            # stored factor = b/a  (skip 1:1 → no change)
-            if a == b:
-                return None
-            return round(b / a, 6)
-
-    # Face-value change: "From Rs 2 To Rs 1", "From Rs.10/- To Rs.2/-"
-    if re.search(r'\b(fv|face\s*val|face value|sub\.?div|split)\b', s):
-        m = re.search(r'(\d+)\D{0,50}?\bto\b\D{0,50}?(\d+)', s)
-        if m:
-            a, b = int(m.group(1)), int(m.group(2))
-            if a == b:
-                return None
-            # Face value A→B: shares scale by A/B, price × B/A
-            # stored factor = A/B
-            return round(a / b, 6)
-
-    return None
 
 
 def ensure(store) -> None:
@@ -128,9 +85,48 @@ def payload_shape(payload) -> str:
     return f"{type(payload).__name__}"
 
 
+def _split_ratio(subject: str) -> float | None:
+    """Price multiplier a split/bonus/face-value-cut imposes on the share price,
+    or None for 'not a split' / 'no usable numbers' (dividends, garbage).
+
+    ONE convention: a split into more pieces always REDUCES the price.
+    Bonus text is arithmetic ("bonus a:b" = b new shares per a held -> a/(a+b),
+    so the usual 1:1 bonus -> 0.5); split notation direction varies ("1:2" or
+    "2:1"), so the price effect is read as the shrink, min:max (an equal split
+    is a no-op -> None). Round-5 review killed the first version, which mixed
+    split=b/a with face-value=a/b into one cumprod — that silently un-adjusted
+    one branch. No usable numbers returns None: unconfirmed is never guessed,
+    and build_split_factors REPORTS the symbol rather than silently no-op'ing
+    a real split.
+    """
+    s = str(subject).lower()
+    if not re.search(r"bonus|split|sub\s*div|sub-div|face\s*val", s):
+        return None
+    is_bonus = "bonus" in s
+    m = re.search(r"(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)", s)
+    if m:
+        a, b = float(m.group(1)), float(m.group(2))
+        if a <= 0 or b <= 0:
+            return None
+        if is_bonus:  # bonus a:b = b new shares per a held -> price * a/(a+b)
+            return round(a / (a + b), 6)
+        # split notation direction varies (1:2 vs 2:1) — the price effect is
+        # always the shrink, so read min:max; an equal split IS a no-op.
+        return round(min(a, b) / max(a, b), 6) if a != b else None
+    if is_bonus and re.search(r"bonus\s+\d", s):  # "Bonus 1" = one new per held
+        return 0.5
+    m = re.search(r"(?:rs\.?|inr)?\s*(\d+(?:\.\d+)?)\s*(?:/-)?\s*to\s*(?:rs\.?|inr)?\s*(\d+(?:\.\d+)?)", s)
+    if m:
+        a, b = float(m.group(1)), float(m.group(2))
+        if a <= 0 or b <= 0 or a == b:
+            return None
+        return round(min(a, b) / max(a, b), 6)
+    return None
+
+
 def upsert_corporate_actions(store, symbol: str, events: list[dict]) -> int:
     """Store parsed corporate-action events in the normalized table."""
-    store.con.executescript(SCHEMA)
+    ensure(store)
     rows = [(symbol.upper(), e["date"], e["kind"], e.get("ratio")) for e in events
             if e.get("date") and e.get("kind")]
     store.con.executemany(
@@ -139,15 +135,22 @@ def upsert_corporate_actions(store, symbol: str, events: list[dict]) -> int:
     return len(rows)
 
 
-def build_split_factors(store, symbol: str, events: list[dict]) -> int:
-    """Build split_factors from parsed events that have a ratio (splits/bonuses)."""
-    store.con.executescript(SCHEMA)
-    split_factors = {}
+def build_split_factors(store, symbol: str, events: list[dict]) -> tuple[int, list[str]]:
+    """Store split factors from parsed split/bonus events. -> (n_stored, unresolved)
+    where unresolved = event kinds that LOOK like splits/bonuses but carry no
+    parseable ratio — reported, never silently dropped."""
+    ensure(store)
+    factors, unresolved = {}, []
     for e in events:
+        if not is_split_kind(e["kind"]):
+            continue
         ratio = _split_ratio(e["kind"])
-        if ratio is not None:
-            split_factors[e["date"]] = ratio
-    return store.upsert_split_factors(symbol, split_factors)
+        if ratio is None:
+            unresolved.append(f"{e['date']}: {e['kind'][:60]}")
+        else:
+            factors[e["date"]] = ratio
+    n = store.upsert_split_factors(symbol, factors)
+    return n, unresolved
 
 
 def parse_events(symbol: str, payload) -> list[dict]:
@@ -175,7 +178,17 @@ def parse_events(symbol: str, payload) -> list[dict]:
 def is_split_kind(kind: str) -> bool:
     """Split/bonus classifier: only words seen in NSE pattern rows. Ambiguous
     purposes are NOT splits — they're never silently used as factors."""
-    return bool(re.search(r"split|bonus", str(kind), re.I))
+    return bool(re.search(r"split|bonus|sub\s*div|face\s*val", str(kind), re.I))
+
+
+def record_parsed(store, symbol: str, events: list[dict]) -> str:
+    """Store events + split factors, one-line result (also used by --from-raw)."""
+    n_ev = upsert_corporate_actions(store, symbol, events)
+    n_sf, unresolved = build_split_factors(store, symbol, events)
+    note = f"{len(events)} events parsed; {n_ev} stored, {n_sf} split factors"
+    if unresolved:
+        note += f"; UNRESOLVED {len(unresolved)}: " + " | ".join(unresolved[:3])
+    return note
 
 
 def _emptyish(data) -> bool:
@@ -191,8 +204,10 @@ def _emptyish(data) -> bool:
 
 def try_fetch(store, symbol: str, client=None) -> dict:
     """Probe v2: try every corporate-actions-ish method × arg form, store each
-    non-empty payload, report every call's shape. One method returning [] proves
-    nothing; the inventory is the answer."""
+    non-empty payload, report every call's shape. The 'equities' option_type
+    form is tried first for actions() (laptop's round-5 signature claim —
+    unverified by paste, so the old forms remain as fallback and a TypeError
+    on the guessed form is REPORTED, not swallowed)."""
     if client is None:
         from indtrader.data.nseapi_provider import NseIndiaApiProvider
         client = NseIndiaApiProvider().client()
@@ -201,35 +216,32 @@ def try_fetch(store, symbol: str, client=None) -> dict:
     if not cands:
         return {"ok": False, "error": f"no corporate-actions method in {type(client).__name__}"}
     sym = symbol.upper()
-    forms = ((sym,), (sym, "cm"), (sym, "F&O"), ())
     probed, stored_any = [], False
     for m in cands:
-        # actions() needs option_type="equities" first positional arg
-        if m == "actions":
-            arg_forms = [("equities",)]
-        else:
-            arg_forms = [(sym,), (sym, "cm"), (sym, "F&O"), ()]
-        for args in arg_forms:
+        meth = getattr(client, m)
+        forms = [((sym,), {"option_type": "equities"}),  # the signature claim, tested first
+                 (("equities", sym), {}), (("equities",), {"symbol": sym}),
+                 ((sym,), {}), ((sym, "cm"), {}), ((sym, "F&O"), {}), ((), {})]
+        for args, kwargs in forms:
+            label = f"{m}({', '.join(map(repr, args))}" + \
+                    (f", {kwargs}" if kwargs else "") + ")"
             try:
-                data = getattr(client, m)(*args)
-            except TypeError:
+                data = meth(*args, **kwargs)
+            except TypeError as e:
+                probed.append(f"{label}: signature-miss {str(e)[:60]}")
                 continue  # wrong arg form for this signature — try the next form
             except Exception as e:
-                probed.append(f"{m}{args}: {type(e).__name__}: {str(e)[:90]}")
+                probed.append(f"{label}: {type(e).__name__}: {str(e)[:90]}")
                 break  # this method's endpoint itself failed — don't hammer it
-            shape = payload_shape(data)
-            note = shape
+            note = payload_shape(data)
             try:
                 events = parse_events(sym, data)
-                stored_events = upsert_corporate_actions(store, sym, events)
-                stored_factors = build_split_factors(store, sym, events)
-                note += (f" -> PARSED {len(events)} events; "
-                         f"{stored_events} stored, {stored_factors} split factors")
+                note += " -> " + record_parsed(store, sym, events)
             except (KeyError, ValueError):
                 pass  # unconfirmed shape: the shape report IS the deliverable
-            probed.append(f"{m}{args}: {note}")
+            probed.append(f"{label}: {note}")
             if not _emptyish(data):
-                store_raw(store, sym, f"{m}{args}", data)
+                store_raw(store, sym, label, data)
                 stored_any = True
                 break  # rows found for this method — other arg forms rarely add more
     if not stored_any:
@@ -238,4 +250,3 @@ def try_fetch(store, symbol: str, client=None) -> dict:
                          "paste this inventory, it decides the next move"}
     return {"ok": True, "stored_any": True, "probed": probed,
             "next": "coractions " + sym + " --from-raw  (replay parser over stored payloads)"}
-

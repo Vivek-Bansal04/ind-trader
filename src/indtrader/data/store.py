@@ -151,31 +151,73 @@ class BarStore:
         return pd.Series([v for _, v in r], index=pd.to_datetime([d for d, _ in r]), name="ratio")
 
     def combined_factors(self, symbol: str) -> pd.Series:
-        """yfinance dividend factors × NSE split factors, forward-filled and normalised.
-
-        A symbol listed after 2015 has no yf factor before listing; a symbol with
-        no splits has no sf factor. Missing = 1.0 (no adjustment). Split factors
-        are stored per split date and cumulatively compounded so multiple splits
-        stack correctly (each split multiplies the running factor).
-        """
+        """Merge yfinance back-adjustment factors with recorded split ratios —
+        WITHOUT double-counting. yfinance records dividends only *in practice*
+        (the round-4 HDFCBANK proof), but 'in practice' is not a guarantee, so
+        each recorded split is checked against yf's own factor STEP on the
+        ex-date: already priced -> skipped (and said so); missing -> its ratio
+        applies to days STRICTLY BEFORE the ex-date (the ex-date's own raw
+        price is post-split). f[t] = b[t] * prod{ r_D : D > t }, with b anchored
+        to 1.0 on the newest day (yfinance convention) and its own level
+        carrying history backward. Round-5 trap kept out: days before the FIRST
+        stored yf factor take that OLDEST factor level, never an assumed 1.0 —
+        a level of 1.0 means 'no adjustment' and would silently erase history."""
         yf = self.adj_factors(symbol)
         sf = self.split_factors(symbol)
         if yf.empty and sf.empty:
             return pd.Series(dtype="float64")
+
+        # day grid: the symbol's own sessions (the factor series must live where
+        # the candles are — split days alone would drop every other day), plus
+        # the factor dates themselves; yf.index/sf.index are DatetimeIndex only
+        # when non-empty (empty factors have an int RangeIndex — union on that
+        # silently degrades to object dtype).
+        days = pd.DatetimeIndex(pd.to_datetime([r[0] for r in self.con.execute(
+            "SELECT DISTINCT d FROM candles WHERE symbol=? AND tf='daily' ORDER BY d",
+            [symbol.upper()]).fetchall()]))
+        parts = [p for p in (days, yf.index if not yf.empty else None,
+                             sf.index if not sf.empty else None) if p is not None]
+        idx = parts[0]
+        for p in parts[1:]:
+            idx = idx.union(p)
+        idx = idx.sort_values()
+
         if yf.empty:
-            # only split factors: 1.0 on non-split dates, ratio on split dates
-            sf_daily = pd.Series(1.0, index=sf.index)
-            sf_daily.loc[sf.index] = sf.values
-            return sf_daily.cumprod()
+            b = pd.Series(1.0, index=idx)  # split-only adjustment; dividends stay unknown
+        else:
+            b = yf.reindex(idx).ffill().bfill()
+            anchor = float(b.iloc[-1]) if not b.empty else 1.0
+            if anchor:  # newest day = 1.0 (yfinance convention: today is always raw)
+                b = b / anchor
+
         if sf.empty:
-            return yf
-        all_dates = yf.index.union(sf.index)
-        yf_f = yf.reindex(all_dates).ffill().fillna(1.0)
-        # split factors: 1.0 on non-split dates, stored ratio on split dates
-        sf_daily = pd.Series(1.0, index=all_dates)
-        sf_daily.loc[sf.index] = sf.values
-        sf_cum = sf_daily.cumprod()
-        return yf_f * sf_cum
+            return b.rename("factor")
+        # Per recorded split on ex-date D with price multiplier r: yf's factor
+        # step ON D (b[D]/b[prev]) says whether yf already priced it. Step ~= r
+        # -> yf recorded it -> NO extra weight (this is the no-double-counting
+        # guarantee, now actually true). Step ~= 1 -> the HDFCBANK reality ->
+        # weight r applies to days strictly BEFORE D.
+        s = pd.Series(1.0, index=idx)
+        skipped_covered = 0
+        for D, r in sf.sort_index().items():
+            prev = b[b.index < D]
+            step = 1.0
+            if D in b.index and len(prev):
+                step = float(b.loc[D]) / float(prev.iloc[-1])
+            # back-adjusted factors step UP by 1/r on an action day — if yf's
+            # step matches the recorded split, yf already priced it.
+            if abs(step * r - 1.0) <= 0.02:
+                skipped_covered += 1
+                continue
+            s.loc[D] = float(r)
+        if skipped_covered:
+            print(f"[combined-factors] {symbol}: {skipped_covered} recorded split(s) already "
+                  "priced by yfinance factors — not double-applied")
+        # extra split weight: for each day t, product of r over split dates > t
+        # (the ex-date itself carries NO extra weight — its raw price is post-split)
+        suffix = s[::-1].cumprod()[::-1]
+        m = suffix / s
+        return (b * m).rename("factor")
 
     def close(self):
         self.con.close()

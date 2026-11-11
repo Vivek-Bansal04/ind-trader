@@ -33,7 +33,7 @@ def test_probe_v2_stores_nonempty_payloads_and_reports_every_shape(store):
     assert "PARSED" not in joined                      # unknown shape never pretends to parse
     raws = ca.raw_payloads(store, "HFCB")
     assert len(raws) == 1                              # only NON-empty payloads stored
-    assert raws[0][1] == "get_corporate_actions('HFCB',)"
+    assert raws[0][1] == "get_corporate_actions('HFCB')"
     assert json.loads(json.dumps(raws[0][2]))["data"][0]["someWeirdKey"] == "17-Nov-2025"
 
 
@@ -79,7 +79,12 @@ def test_cli_coractions_from_raw_offline(tmp_path, monkeypatch, capsys):
     rc = main(["coractions", "ACME", "--from-raw"])
     out = capsys.readouterr().out
     get_settings.cache_clear()
-    assert rc == 0 and "1 events" in out and "1 split/bonus" in out
+    assert rc == 0 and "1 events parsed" in out and "1 split factors" in out
+    # and a replay actually BUILDS the factor — that's the point of --from-raw
+    s2 = BarStore(tmp_path / "bars.sqlite")
+    sf = s2.split_factors("ACME")
+    s2.close()
+    assert list(sf.values) == [0.5]
 
 
 def test_cli_coractions_needs_lib_for_live_probe(tmp_path, monkeypatch, capsys):

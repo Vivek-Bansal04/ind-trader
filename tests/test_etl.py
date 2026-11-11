@@ -190,6 +190,8 @@ def test_fresh_but_shallow_series_still_fetches(tmp_path, capsys):
     _, prov = run(tmp_path, ["SHALLOW"], skip_fresh=True)
     assert prov.calls == 1                       # shallow + not-deep → refetch
     assert "skipped" not in capsys.readouterr().out
+
+
 def test_new_listing_with_real_tail_is_skipped(tmp_path, capsys):
     """Round-5 live finding: ~193/499 symbols listed after 2015 failed the old
     both-prongs rule EVERY night, so run_once blew past 2 minutes re-fetching

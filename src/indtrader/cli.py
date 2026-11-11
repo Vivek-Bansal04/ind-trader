@@ -27,7 +27,7 @@ def _load_or_fetch(store: BarStore, symbol: str, adjusted: bool = False) -> pd.D
         print(f"[cli] {symbol} not in store — fetching from provider...")
         fetch_universe([symbol], store=store, providers=build_providers(get_settings()))
         df = store.load(symbol, adjusted=adjusted)
-    if adjusted and store.adj_factors(symbol).empty:
+    if adjusted and store.combined_factors(symbol).empty:
         print(f"[cli] {symbol}: no adjustment factors stored — backtest runs on RAW prices "
               "(run fetch-adj on a normal network for split/dividend-correct series)")
     return df
@@ -375,18 +375,19 @@ def cmd_health(args) -> int:
             stale = staleness_days(df.index, sessions)
             f = store.adj_factors(sym)
             cov = round(float(f.reindex(df.index, method="ffill").ffill().notna().mean()), 3) if len(f) else 0.0
-            # Split-gap: every |raw move| >= 35% must be matched by a factor STEP of
-            # matching size on the same day (F = adj/raw back-adjustment: a 1:2 split
-            # halves closes at d and steps F by ~2.0 there). Dividend steps (~0.985)
-            # leave the cliff in the ADJUSTED series — the exact HDFCBANK lie.
+            # Split-gap runs against the MERGED factors (yf + recorded NSE splits):
+            # the question is "is the adjusted series wrong", not "does yf alone
+            # cover it" — a symbol whose split was recorded by coractions must go
+            # quiet here, and one still named has a cliff NO source explains.
+            fc = store.combined_factors(sym)
             gaps = []
             pct = df["close"].pct_change()
             for ts, p in pct[pct.abs() >= SPLIT_JUMP].items():
                 d = pd.Timestamp(ts)
                 step = None
-                if len(f):
-                    before = f[f.index < d]
-                    on = f[f.index <= d]
+                if len(fc):
+                    before = fc[fc.index < d]
+                    on = fc[fc.index <= d]
                     if len(on):  # no factor at/before d at all -> step None -> gap
                         b = float(before.iloc[-1]) if len(before) else 1.0
                         step = round(float(on.iloc[-1]) / b, 3) if b else None
@@ -406,8 +407,9 @@ def cmd_health(args) -> int:
                   f"factors do NOT cover — adjusted series is wrong for these:")
             for g in split_gaps[:args.max_gaps]:
                 print("  " + g)
-            print("  (dividend-only factors from yfinance; the step column shows what the "
-                  "factors actually did on the day — a split needs 0.4-0.7 or 1.4-2.5)")
+            print("  (step is measured against MERGED yfinance+recorded-split factors — a gap "
+                  "here means NO source explains the day; the step column shows what the "
+                  "factors actually did — a split needs 0.4-0.7 or 1.4-2.5)")
         print(f"[health] {bad} problem symbol(s) of {len(rows)} "
               f"(thresholds: missing>{args.max_missing} sessions, stale>{args.max_stale})")
         return 1 if bad else 0
@@ -813,7 +815,7 @@ def cmd_coractions(args) -> int:
             for fetched_on, method, payload in ca.raw_payloads(store, args.symbol):
                 try:
                     events = ca.parse_events(args.symbol, payload)
-                    note = f"{len(events)} events ({sum(1 for e in events if ca.is_split_kind(e['kind']))} split/bonus)"
+                    note = ca.record_parsed(store, args.symbol, events)  # replay BUILDS factors
                 except (KeyError, ValueError) as e:
                     note = f"parse REFUSED: {e}"
                 outs.append({"fetched_on": fetched_on, "method": method, "result": note})
