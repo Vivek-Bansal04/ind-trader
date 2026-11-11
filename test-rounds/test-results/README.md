@@ -1,3 +1,6 @@
+> Evidence paste from the MacBook (round 7): README as seen there plus the
+> full pytest output. Now under `test-rounds/` with the checklists it validates.
+
 # ind-trader
 
 Personal, non-intraday trading & investing platform for Indian equities (NSE/BSE). Daily/weekly bars only — signals on closed bars, decisions in the evening, execution next morning by hand, CNC/delivery only. **No intraday, no scalping, no F&O, no leverage — there is no code path to any of them.**

@@ -393,7 +393,7 @@ ANSWER 7:
 
 ## Round 2 — the exact short list (2026-11-11)
 
-**→ This is now a runnable file: `ROUND2-TODO.md` at the repo root. Run that; it is
+**→ This is now a runnable file: `test-rounds/ROUND2-TODO.md`. Run that; it is
 self-contained (every command inlined) and its PASTE boxes are the answer format.**
 The numbered list below stays as the rationale for each item.
 

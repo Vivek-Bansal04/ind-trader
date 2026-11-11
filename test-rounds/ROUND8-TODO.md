@@ -1,3 +1,6 @@
+> Moved to `test-rounds/` on 2026-11-12 — edit THIS file where it now lives; the
+> paste-back workflow (paste into the file, push it back) is unchanged.
+
 # ROUND 8 — laptop checklist (~20 min). Round 7 closed it: NSE subjects DO
 # state ratios, they just wrap words inside the from-to phrase ("From Rs 2 Per
 # Share To Rs 1 Per Share"). The parser now reads that spelling, and the first

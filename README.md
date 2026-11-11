@@ -5,10 +5,12 @@ Daily/weekly bars only — signals on closed bars, decisions in the evening, exe
 next morning by hand, CNC/delivery only. **No intraday, no scalping, no F&O, no
 leverage — there is no code path to any of them.**
 
-New here? [`layman-readme.md`](layman-readme.md) explains what this is, how a day
+New here? [`docs/LAYMAN.md`](docs/LAYMAN.md) explains what this is, how a day
 with it works, and when real money makes sense — no jargon, no code.
 Want the exact math instead? [`docs/ALGORITHMS.md`](docs/ALGORITHMS.md) specifies
-every formula, threshold and fold rule as built — written to be attacked.
+every formula, threshold and fold rule as built — written to be attacked;
+[`docs/RULES.md`](docs/RULES.md) lists every rule and constant the code
+enforces, each with a worked example.
 
 Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositories
 (including every fork on this profile). Every design choice is attributable — see
@@ -79,6 +81,8 @@ python -m indtrader.cli backtest RELIANCE --strategy trend_sma200 --costs
 ```
 
 Full guide including Docker automation: **`docs/RUNNING.md`**.
+Every doc lives in [`docs/`](docs/); the live laptop checklists and pasted
+evidence live in [`test-rounds/`](test-rounds/).
 
 ```bash
 # The WHOLE project in one command: nightly ETL loop + read-only dashboard,
@@ -164,7 +168,7 @@ switch, ETL+Docker, AI router (+ grounding rules, contract
 evals, falsifier field), freshness CI.
 Phases 1–3 of the plan are code-complete; the live-data half (Nifty-500 backfill finish,
 10y walk-forward runs on the laptop, shareholding payload probe) runs on the <PERSON>
-per ROUND3-TODO.md — this network blocks NSE/Yahoo. Phase 4 (paper loop, 6–8 weeks)
+per [`test-rounds/ROUND3-TODO.md`](test-rounds/ROUND3-TODO.md) — this network blocks NSE/Yahoo. Phase 4 (paper loop, 6–8 weeks)
 starts from that same checklist; its discipline tooling (plans, attribution, decay,
 dead-man) is all in. Phase 6 (investing leg) is feature-complete offline and live-verified where possible:
 MF NAV layer (AMFI is NOT blocked — 14,445 NAVs stored, contract-probe green, 2026-11-10),
@@ -174,7 +178,7 @@ rebalance proposals with the tax lens, MF slice + CA income surfaced in review a
 riskreport. Phase 5 stays gated on
 Phase 4 passing, per plan; its buildable surface already exists (read-only reconcile,
 journal, sizing).
-Next: the laptop session (ROUND3-TODO.md), then the Phase-4 clock. Deferred backlog —
+Next: the laptop session (`test-rounds/ROUND3-TODO.md`), then the Phase-4 clock. Deferred backlog —
 each item gets built only if it earns its place, otherwise dropped:
 - screener.in fundamentals (where the endpoint is verifiable).
 - NSE's official MCP server (nseindia.com/nse-mcp, live since ~Jun 2026, no key).

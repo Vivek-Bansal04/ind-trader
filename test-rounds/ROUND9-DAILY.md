@@ -1,3 +1,6 @@
+> Moved to `test-rounds/` on 2026-11-12 — edit THIS file where it now lives; the
+> paste-back workflow (paste into the file, push it back) is unchanged.
+
 # ROUND 9+ — the daily 2 minutes (no round number after this — this file IS
 # the rhythm). Phase 4 closes after 20 consecutive trading days whose nightly
 # `[etl-loop]` line is clean; this file is how we see that from here without
