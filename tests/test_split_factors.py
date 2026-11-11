@@ -42,8 +42,17 @@ def adj_of(store):
 
 def test_split_ratio_single_convention():
     assert ca._split_ratio("Split of shares 1:2") == 0.5        # price halves
-    assert ca._split_ratio("Stock split: from 1 share to 5 shares") is None  # no ratio -> None, NOT silent 1.0
-    assert ca._split_ratio("BONUS ISSUE 1:1") == 0.5            # shares double
+    # ROUND-7 reversal: this DOES state the price effect — receive 5 per 1 held,
+    # price shrinks to 1/5. The old None was the too-strict "numbers must touch
+    # 'to'" regex refusing to read it, and the live NSE spelling proved readers
+    # exist ("From Rs 2 Per Share To Rs 1 Per Share"). Read as the shrink.
+    assert ca._split_ratio("Stock split: from 1 share to 5 shares") == 0.2
+    assert ca._split_ratio("Face Value Split (Sub-Division) - From Rs 2 Per Share To Rs 1 Per Share") == 0.5
+    assert ca._split_ratio("Face value re-issue from Rs 10 to Rs 2") == 0.2
+    assert ca._split_ratio("Sub-Division from Rs 10/- to Rs 5/- per share") == 0.5
+    assert ca._split_ratio("Book Closure and Etransfer from 01-Apr-2025 to 15-Apr-2025") is None  # no split word, dates never a ratio
+    assert ca._split_ratio("Split certificate from 01-Apr-2025 to 15-Apr-2025") is None           # split word but only DATE pairs — anchored routes refuse
+    assert ca._split_ratio("Bonus Issue 1:1") == 0.5            # shares double
     assert ca._split_ratio("Bonus 1:2") == round(1 / 3, 6)      # 3 shares from 1
     assert ca._split_ratio("Face value split from Rs.10 to Rs.2") == 0.2
     assert ca._split_ratio("Dividend Rs 12 per share") is None  # dividend: never a factor

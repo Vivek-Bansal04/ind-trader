@@ -73,45 +73,6 @@ def raw_payloads(store, symbol: str) -> list[tuple[str, str, object]]:
         "WHERE symbol=? ORDER BY rowid DESC", [symbol.upper()]).fetchall()]
 
 
-def _split_ratio(subject: str) -> float | None:
-    """Price multiplier a split/bonus/face-value-cut imposes on the share price,
-    or None for 'not a split' / 'no usable numbers' (dividends, garbage).
-
-    ONE convention: a split into more pieces always REDUCES the price.
-    Bonus text is arithmetic ("bonus a:b" = b new shares per a held -> a/(a+b),
-    so the usual 1:1 bonus -> 0.5); split notation direction varies ("1:2" or
-    "2:1"), so the price effect is read as the shrink, min:max (an equal split
-    is a no-op -> None). Round-5 review killed the first version, which mixed
-    split=b/a with face-value=a/b into one cumprod — that silently un-adjusted
-    one branch. No usable numbers returns None: unconfirmed is never guessed,
-    and build_split_factors REPORTS the symbol rather than silently no-op'ing
-    a real split.
-    """
-    s = str(subject).lower()
-    if not re.search(r"bonus|split|sub\s*div|sub-div|face\s*val", s):
-        return None
-    is_bonus = "bonus" in s
-    m = re.search(r"(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)", s)
-    if m:
-        a, b = float(m.group(1)), float(m.group(2))
-        if a <= 0 or b <= 0:
-            return None
-        if is_bonus:  # bonus a:b = b new shares per a held -> price * a/(a+b)
-            return round(a / (a + b), 6)
-        # split notation direction varies (1:2 vs 2:1) — the price effect is
-        # always the shrink, so read min:max; an equal split IS a no-op.
-        return round(min(a, b) / max(a, b), 6) if a != b else None
-    if is_bonus and re.search(r"bonus\s+\d", s):  # "Bonus 1" = one new per held
-        return 0.5
-    m = re.search(r"(?:rs\.?|inr)?\s*(\d+(?:\.\d+)?)\s*(?:/-)?\s*to\s*(?:rs\.?|inr)?\s*(\d+(?:\.\d+)?)", s)
-    if m:
-        a, b = float(m.group(1)), float(m.group(2))
-        if a <= 0 or b <= 0 or a == b:
-            return None
-        return round(min(a, b) / max(a, b), 6)
-    return None
-
-
 def upsert_corporate_actions(store, symbol: str, events: list[dict]) -> int:
     """Store parsed corporate-action events. The ratio column holds the PARSED
     price multiplier when the subject text stated one — never the raw faceVal,
@@ -231,9 +192,9 @@ def _ratio_from_num_text(kind: str) -> float | None:
     a split is always a fall. A '1:1' with no bonus/split word, or text with no
     numbers, returns None — the caller then names the event as UNRESOLVED,
     and health's split-gap keeps the symbol red until a human reads it. That is
-    the correct cost of not guessing: HDFCBANK's 2025 bonus sits in exactly
-    this state (the probe's own paste shows the subject had no ratio), so its
-    factor is NOT stored and the cliff stays flagged."""
+    the correct cost of not guessing — and round-7 proved it is a small cost:
+    NSE subjects DO state the numbers, they just wrap words inside the
+    from-to phrase."""
     s = str(kind).lower()
     is_bonus = "bonus" in s
     m = re.search(r"(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)", s)
@@ -246,7 +207,16 @@ def _ratio_from_num_text(kind: str) -> float | None:
         return round(min(a, b) / max(a, b), 6) if a != b else None
     if is_bonus and re.search(r"bonus\s+\d", s):  # "Bonus 1" = one new per held
         return 0.5
-    m = re.search(r"(?:rs\.?|inr)?\s*(\d+(?:\.\d+)?)\s*(?:/-)?\s*to\s*(?:rs\.?|inr)?\s*(\d+(?:\.\d+)?)", s)
+    # ROUND-7 LIVE SPELLING (HDFCBANK, verbatim): "Face Value Split (Sub-Division)
+    # - From Rs 2 Per Share To Rs 1 Per Share" — words sit between the number and
+    # "to", which the round-6 regex could not read. Both routes stay ANCHORED
+    # ("rs/inr" pair or "from X ... to Y"): a bare "X to Y" would read the
+    # books-closure dates in "from 01-Apr to 15-Apr" as a face-value cut.
+    m = re.search(r"(?:rs\.?|inr)\s*(\d+(?:\.\d+)?)\s*(?:[\w/+-]+\s+){0,3}to\s*(?:[\w/+-]+\s+){0,3}?"
+                  r"(?:rs\.?|inr)?\s*(\d+(?:\.\d+)?)", s)
+    if m is None:
+        m = re.search(r"from\s+(?:rs\.?|inr)?\s*(\d+(?:\.\d+)?)\s+(?:[\w/+-]+\s+){0,3}?to\s+"
+                      r"(?:rs\.?|inr)?\s*(\d+(?:\.\d+)?)", s)
     if m:
         a, b = float(m.group(1)), float(m.group(2))
         if a <= 0 or b <= 0 or a == b:
