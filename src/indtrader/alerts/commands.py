@@ -78,6 +78,8 @@ def _help() -> str:
     return ("ind-trader bot — reads + journal only, it can never place orders.\n"
             "/status  regime + book + loop state\n/book  holdings at last marks\n/scan  last shortlist\n"
             "/events  upcoming results\n/ann  flagged announcements (holdings)\n"
+            "/plan SYM QTY ENTRY STOP TARGET reason...  write a plan (mandatory rationale)\n"
+            "/plans  open plans\n"
             "/fill SYM BUY|SELL QTY PX [COSTS]  record a fill you ALREADY made\n"
             "/pause | /resume  quiet the daily outbound loop")
 
@@ -267,6 +269,55 @@ def _fill(argv, s):
         return f"fill rejected: {type(e).__name__}: {str(e)[:150]}"
     finally:
         log.close()
+
+
+@command("plan")
+def _plan(argv, s):
+    """Creates a WRITTEN plan (a journal write — same allowed class as /fill). It is
+    not an order and cannot become one: there is no broker call anywhere."""
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.models import OrderPlan
+
+    if len(argv) < 5:
+        return "usage: /plan SYM QTY ENTRY STOP TARGET reason words..."
+    sym, qty_s, entry_s, stop_s, target_s = argv[0], argv[1], argv[2], argv[3], argv[4]
+    reason = " ".join(argv[5:]).strip()
+    if len(reason) < 10:
+        return "a written rationale is mandatory (>= 10 chars) — no reason, no plan"
+    try:
+        qty, entry, stop, target = int(qty_s), float(entry_s), float(stop_s), float(target_s)
+    except ValueError:
+        return "qty/entry/stop/target must be numbers"
+    if not 0 < stop < entry < target:
+        return f"for a BUY need stop < entry < target (got {stop} / {entry} / {target})"
+    log = PlanLog()
+    try:
+        pid = log.add_plan(OrderPlan(symbol=sym, action="BUY", qty=qty, entry=entry,
+                                     stop=stop, target=target, reason=reason, setup="manual"))
+        return (f"plan #{pid}: BUY {qty} {sym.upper()} entry {entry:g} stop {stop:g} "
+                f"target {target:g} — {reason}")
+    except Exception as e:
+        return f"plan rejected: {type(e).__name__}: {str(e)[:150]}"
+    finally:
+        log.close()
+
+
+@command("plans")
+def _plans(argv, s):
+    from indtrader.execution.planlog import PlanLog
+
+    log = PlanLog()
+    try:
+        rows = log.open_plans()
+    finally:
+        log.close()
+    if not rows:
+        return "no open plans (draft one: /plan SYM QTY ENTRY STOP TARGET reason...)"
+    out = [f"{len(rows)} open plan(s):"]
+    for r in rows[:10]:  # column order per plans schema: id, created, symbol, ...
+        out.append(f"#{r[0]} {r[2]} {r[3]} qty {r[4]} entry {r[5]:g} stop {r[6]:g} "
+                   f"target {r[7]:g} | {str(r[8] or '')[:40]}")
+    return "\n".join(out)
 
 
 @command("pause")

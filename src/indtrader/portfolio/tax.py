@@ -89,6 +89,46 @@ LTCG_RATE = 0.125
 
 
 @dataclass(frozen=True)
+class OpenLot:
+    """A still-held FIFO lot: acquisition date, remaining qty, per-unit cost and the
+    pro-ration anchor for its buy-side costs (the original fill qty)."""
+    symbol: str
+    dt: date
+    qty: float
+    price: float
+    costs: float
+    fill_qty: float
+
+
+def open_lots(entries: list[LedgerEntry]) -> list[OpenLot]:
+    """FIFO-consume the sells and return what is LEFT — the unrealized side of the
+    ledger. Same traversal as realize(), so harvested candidates and realized P&L
+    can never disagree about which lots exist."""
+    books: dict[str, deque[list]] = {}
+    for e in sorted(entries, key=lambda x: (x.dt, x.side == "BUY")):
+        book = books.setdefault(e.symbol.upper(), deque())
+        if e.side.upper() == "BUY":
+            book.append([e.dt, e.qty, e.price, e.costs, e.qty])
+            continue
+        remaining = e.qty
+        while remaining > 0:
+            if not book:
+                raise ValueError(f"{e.symbol}: sell {e.qty} on {e.dt} exceeds holdings (FIFO)")
+            lot = book[0]
+            take = min(lot[1], remaining)
+            lot[1] -= take
+            remaining -= take
+            if lot[1] == 0:
+                book.popleft()
+    out = []
+    for sym, book in books.items():
+        for dt, qty, price, costs, fill_qty in book:
+            if qty > 0:
+                out.append(OpenLot(sym, dt, qty, price, costs, fill_qty))
+    return sorted(out, key=lambda l: (l.symbol, l.dt))
+
+
+@dataclass(frozen=True)
 class FyTax:
     financial_year: str
     stcg_net: float

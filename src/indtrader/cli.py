@@ -40,7 +40,7 @@ def cmd_fetch(args) -> int:
 
 
 def cmd_fetch_universe(args) -> int:
-    res = fetch_universe(load_universe(args.file))
+    res = fetch_universe(load_universe(args.file), skip_fresh=args.skip_fresh)
     print(json.dumps(res, indent=1))
     return 0
 
@@ -129,6 +129,19 @@ def cmd_scan(args) -> int:
         if missing:
             print("missing:", ", ".join(missing), file=sys.stderr)
         return 1
+    # DEAD-MAN (plan §A "no fresh bars, no orders"): staleness must be measured vs
+    # TODAY — the index defines its own session calendar, so bars can never be
+    # "stale" against themselves. Business days; default tolerates a long weekend
+    # (5) plus a couple of holidays.
+    import numpy as np
+
+    last_bar = pd.Timestamp(idx.index.max()).date()
+    age_bdays = int(np.busday_count(last_bar, pd.Timestamp.today().date()))
+    if age_bdays > args.max_stale and not args.ignore_stale:
+        print(f"DEAD-MAN: last {args.index} bar is {last_bar} — {age_bdays} business days ago "
+              f"(> {args.max_stale}). Signals on stale bars can fake a trend: fix the ETL "
+              "first. --ignore-stale overrides.", file=sys.stderr)
+        return 1
     regime = regime_from_data(closes, idx["close"], idx["volume"])
     table = scan(closes, bench=idx["close"], regime=regime, top=args.top, extras=extras,
                  volumes=volumes, bars=bars)
@@ -172,6 +185,77 @@ def cmd_fetch_adj(args) -> int:
     if zero:
         print("no factor data (adjusted reads stay RAW for these):", ", ".join(zero[:20]))
     return 0
+
+
+def cmd_contract_test(args) -> int:
+    """Phase-1 acceptance: our store's closes vs NSE's own bhavcopy for one session.
+    Default session = most recent date the store holds (the bhav file for a session
+    only exists after settlement — probing "today" just 403s/NSEFileUnavailable)."""
+    from indtrader.data.contract import bhav_close_map, contract_check, load_bhavcopy
+    from indtrader.data.nseapi_provider import NseIndiaApiProvider
+
+    if not NseIndiaApiProvider.available():
+        print("contract-test needs the nse lib (pip install 'indtrader[nse]') — run on the laptop",
+              file=sys.stderr)
+        return 2
+    syms = load_universe(args.file) if args.file else load_universe(None)
+    store = BarStore()
+    try:
+        session = args.date or max(
+            (str(store.last_date(s))[:10] for s in set(syms) if store.last_date(s) is not None),
+            default=None)
+        if not session:
+            print("store empty — run fetch-universe first", file=sys.stderr)
+            return 1
+        n = NseIndiaApiProvider().client()
+        try:
+            df = load_bhavcopy(n, date.fromisoformat(session))
+        finally:
+            if hasattr(n, "close"):
+                n.close()
+        res = contract_check(store, syms, bhav_close_map(df), session, tolerance=args.tolerance)
+        print(json.dumps(res, indent=1, default=str))
+        ok = res["checked"] >= args.min_checked and not res["mismatched"]
+        print("PASS" if ok else f"FAIL (need >= {args.min_checked} checked, 0 mismatches)")
+        return 0 if ok else 1
+    finally:
+        store.close()
+
+
+def cmd_holidays(args) -> int:
+    """NSE trading-holiday calendar (CBM) for a year — cross-check vs the store's
+    NIFTY bar dates: a holiday with a bar, or a trading day missing a bar, is ETL drift."""
+    from datetime import date as _date
+
+    from indtrader.data.contract import holidays_calendar
+    from indtrader.data.nseapi_provider import NseIndiaApiProvider
+
+    if not NseIndiaApiProvider.available():
+        print("holidays needs the nse lib (pip install 'indtrader[nse]') — run on the laptop",
+              file=sys.stderr)
+        return 2
+    year = args.year or _date.today().year
+    n = NseIndiaApiProvider().client()
+    try:
+        hol = holidays_calendar(n, year)
+    finally:
+        if hasattr(n, "close"):
+            n.close()
+    store = BarStore()
+    try:
+        idx = store.load(args.index)
+        print(f"{year}: {len(hol)} CBM trading holidays "
+              f"({min(hol)} .. {max(hol)})" if hol else f"{year}: no holidays parsed?!")
+        if idx.empty:
+            print(f"no {args.index} bars in store — calendar stored but not cross-checked")
+            return 0
+        bar_days = {str(d)[:10] for d in pd.to_datetime(idx.index)}
+        yr_days = {d for d in hol if d.startswith(str(year))}
+        bad = sorted(d for d in yr_days if d in bar_days and _date.fromisoformat(d).weekday() < 5)
+        print("holidays that HAVE bars (should be none unless half-day/weekend-listed):", bad or "none")
+        return 0
+    finally:
+        store.close()
 
 
 def cmd_health(args) -> int:
@@ -459,6 +543,181 @@ def cmd_actions(args) -> int:
         log.close()
 
 
+def cmd_harvest(args) -> int:
+    """Pre-March harvest candidates: open FIFO lots x marks x this FY's realized LTCG."""
+    from datetime import date as _date
+
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio.actions import apply_actions, load_actions
+    from indtrader.portfolio.harvest import harvest_candidates, lines
+    from indtrader.portfolio.tax import realize
+    from indtrader.portfolio.valuation import held_quantities, resolve_marks
+
+    store, log = BarStore(), PlanLog()
+    try:
+        entries = apply_actions(log.fills(), load_actions(log))
+        equity = [e for e in entries if not e.symbol.upper().startswith("MF:")]
+        mf_n = len(entries) - len(equity)
+        if mf_n:
+            print(f"(skipping {mf_n} MF ledger rows: debt-fund slab rules differ; equity lots only)")
+        if not equity:
+            print("no equity fills — nothing to harvest")
+            return 0
+        marks = resolve_marks(store, held_quantities(equity))
+        asof = _date.fromisoformat(args.asof) if args.asof else _date.today()
+        rep = harvest_candidates(equity, marks, realize(equity), asof)
+        for line in lines(rep):
+            print(line)
+        return 0
+    finally:
+        store.close()
+        log.close()
+
+
+def cmd_decay(args) -> int:
+    """Paper book vs the strategy's own Monte-Carlo band. REVIEW flag = human decides;
+    nothing here acts."""
+    from indtrader.backtest.costs import DeliveryCosts
+    from indtrader.backtest.engine import Backtester
+    from indtrader.backtest.strategies import REGISTRY
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio.actions import apply_actions, load_actions
+    from indtrader.portfolio.tax import realize
+    from indtrader.research.decay import decay_check
+
+    store, log = BarStore(), PlanLog()
+    try:
+        df = _load_or_fetch(store, args.symbol)
+        if df.empty:
+            print(f"no bars for {args.symbol}", file=sys.stderr)
+            return 1
+        res = Backtester(costs=DeliveryCosts()).run(df, REGISTRY[args.strategy](), symbol=args.symbol.upper())
+        baseline = [t.pnl for t in res.trades if t.exit_price is not None]
+        paper = [m.net for m in realize(apply_actions(log.fills(), load_actions(log)))]
+        out = decay_check(baseline, paper, capital=args.capital, window=args.window)
+        if out is None:
+            print(f"cannot judge: baseline has {len(baseline)} closed trades "
+                  f"(< 20 — too little to bootstrap honestly)", file=sys.stderr)
+            return 1
+        print(json.dumps(out, indent=1))
+        if out.get("below_p5_all"):
+            print("-> strategy is below its OWN expectation band: put it under review "
+                  "(review = decide, not auto-trade).")
+        return 0
+    finally:
+        store.close()
+        log.close()
+
+
+def cmd_import_csv(args) -> int:
+    from indtrader.data.ingest import FORMATS, import_into_log, parse_trade_csv
+    from indtrader.execution.planlog import PlanLog
+
+    col_map = None
+    if args.map:
+        col_map = {}
+        for pair in args.map.split(","):
+            field, _, col = pair.partition("=")
+            col_map[field.strip()] = col.strip()
+    try:
+        entries = parse_trade_csv(args.file, fmt=args.format, column_map=col_map)
+    except ValueError as e:
+        print(f"import rejected: {e}", file=sys.stderr)
+        return 1
+    if not args.apply:
+        print(f"{len(entries)} rows validated; first 5:")
+        for e in entries[:5]:
+            print(f"  {e.dt} {e.symbol} {e.side} {e.qty:g} @ {e.price:,.2f} costs {e.costs:,.2f}")
+        print("(nothing written — this CLI never imports on faith: rerun with --apply)")
+        return 0
+    log = PlanLog()
+    try:
+        n = import_into_log(entries, log)
+        print(f"imported {n} fills ({len(entries) - n} exact duplicates skipped)")
+        return 0
+    finally:
+        log.close()
+
+
+def cmd_shareholding(args) -> int:
+    from indtrader.research import shareholding as sh
+
+    store = BarStore()
+    try:
+        if args.set is not None:
+            try:
+                sym_q, promoter, fii, dii, public, pledge = args.set.split(":")
+                sym, period = sym_q.rsplit("@", 1)
+
+                def f(v):
+                    return None if v in ("", "-") else float(v)
+
+                sh.record(store, sym, period, f(promoter), f(fii), f(dii), f(public), f(pledge))
+                print(f"recorded {sym.upper()} {period}")
+            except ValueError as e:
+                print(f"bad --set (want SYM@PERIOD:promoter:fii:dii:public:pledge): {e}",
+                      file=sys.stderr)
+                return 1
+            return 0
+        if args.fetch:
+            print(json.dumps(sh.try_fetch(store, args.fetch), indent=1))
+            return 0
+        if args.symbol:
+            dl = sh.deltas(store, args.symbol)
+            if not dl:
+                print(f"no quarters stored for {args.symbol.upper()} — record from the "
+                      "exchange filing with --set, or probe the live shape with --fetch")
+                return 0
+            for d in dl:
+                mark = "  <-- " + ", ".join(d["flags"]) if d["flags"] else ""
+                print(f"{d['prev']} -> {d['period']}: promoter {d['dpromoter']}, "
+                      f"fii {d['dfii']}, pledge {d['dpledge']}{mark}")
+            return 0
+        alerts = sh.holding_alerts(store, [s.strip().upper() for s in args.holdings.split(",")
+                                           if s.strip()] if args.holdings else [])
+        print("\n".join(alerts) if alerts else "no shareholding red deltas on holdings")
+        return 0
+    finally:
+        store.close()
+
+
+def cmd_backup(args) -> int:
+    from indtrader.scheduler.backup import backup_all, prune
+
+    s = get_settings()
+    dbs = [s.data_dir / "bars.sqlite", s.data_dir / "plans.sqlite"]
+    dest = args.dest or (s.data_dir / "backups")
+    res = backup_all(dbs, dest)
+    removed = prune(dest, keep=args.keep)
+    print(json.dumps({**res, "pruned": removed}, indent=1))
+    if res["failed"]:
+        print("BACKUP PROBLEM — fix before trusting anything", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_restore(args) -> int:
+    from pathlib import Path
+
+    from indtrader.scheduler.backup import restore
+
+    s = get_settings()
+    target = {"bars": s.data_dir / "bars.sqlite", "plans": s.data_dir / "plans.sqlite"}[args.kind]
+    try:
+        out = restore(Path(args.backup), target)
+        print(f"restored {args.backup} -> {out} (previous copy kept as {target.name}.pre-restore)")
+        return 0
+    except Exception as e:
+        print(f"restore refused: {e}", file=sys.stderr)
+        return 1
+
+
+def cmd_dashboard(args) -> int:
+    from indtrader.web.dashboard import serve
+
+    return serve(port=args.port)
+
+
 def cmd_bot(args) -> int:
     from indtrader.alerts.commands import poll_loop
 
@@ -513,10 +772,197 @@ def cmd_fill(args) -> int:
     from indtrader.execution.planlog import PlanLog
 
     when = args.date or _date.today().isoformat()
+    note = args.note or ""
     log = PlanLog()
-    fid = log.add_fill(when, args.symbol, args.side, args.qty, args.price, args.costs, args.note)
+    plan_row = None
+    if args.plan:
+        plan_row = log.con.execute(
+            "SELECT symbol, status, entry, qty FROM plans WHERE id=?", [args.plan]).fetchone()
+        if plan_row is None:
+            print(f"no plan #{args.plan} — create one first: indtrader plan SYM BUY ...",
+                  file=sys.stderr)
+            log.close()
+            return 1
+        if plan_row[1] != "open":
+            print(f"plan #{args.plan} is '{plan_row[1]}', not open — fills only "
+                  "close OPEN plans", file=sys.stderr)
+            log.close()
+            return 1
+    fid = log.add_fill(when, args.symbol, args.side, args.qty, args.price, args.costs,
+                       ((note + " ") if note else "") + (f"plan#{args.plan}" if args.plan else note))
+    if args.plan:
+        log.mark(args.plan, "executed")
     log.close()
-    print(f"ledger fill #{fid}: {args.side} {args.qty} {args.symbol.upper()} @ {args.price} on {args.date}")
+    slip = ""
+    if plan_row is not None:
+        p_entry, p_qty = float(plan_row[2]), float(plan_row[3])
+        sl = (args.price - p_entry) / p_entry if p_entry else 0.0
+        slip = (f" — slippage vs plan entry {p_entry}: {sl:+.2%} on this fill"
+                + ("" if args.qty == p_qty else f" (planned qty {p_qty:g}, filled {args.qty:g})"))
+    print(f"ledger fill #{fid}: {args.side} {args.qty} {args.symbol.upper()} @ {args.price} on {when}"
+          + (f" (plan #{args.plan} -> executed{slip})" if args.plan else ""))
+    return 0
+
+
+def cmd_plan(args) -> int:
+    """The plan-vs-actual front door: every position starts as a WRITTEN plan
+    (Phase-4 rule: signal traceable to a rationale)."""
+    from datetime import date as _date
+
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.models import OrderPlan
+
+    reason = (args.reason or "").strip()
+    if len(reason) < 10:
+        print("a written rationale is mandatory (>= 10 chars) — no reason, no plan",
+              file=sys.stderr)
+        return 1
+    if not 0 < args.stop < args.entry < args.target:
+        print(f"for a BUY need stop < entry < target (got {args.stop} / {args.entry} / {args.target})",
+              file=sys.stderr)
+        return 1
+    log = PlanLog()
+    pid = log.add_plan(OrderPlan(symbol=args.symbol, action="BUY", qty=args.qty, entry=args.entry,
+                                 stop=args.stop, target=args.target, reason=reason,
+                                 setup=args.setup or "manual"))
+    log.expire_stale(_date.today())
+    log.close()
+    print(f"plan #{pid}: BUY {args.qty} {args.symbol.upper()} entry {args.entry} "
+          f"stop {args.stop} target {args.target} [{args.setup or 'manual'}] — {reason}")
+    return 0
+
+
+def cmd_plans(args) -> int:
+    from indtrader.execution.planlog import PlanLog
+
+    log = PlanLog()
+    rows = log.con.execute(
+        "SELECT id, created, symbol, qty, entry, stop, target, setup, status, reason "
+        "FROM plans " + ("" if args.all else "WHERE status='open' ") +
+        "ORDER BY status DESC, created DESC LIMIT 40").fetchall()
+    log.close()
+    if not rows:
+        print("no open plans — draft one with: indtrader plan SYM BUY --qty N --entry E "
+              "--stop S --target T --reason \"...\"")
+        return 0
+    for r in rows:
+        print(f"#{r[0]:<4} {str(r[1])[:16]} {r[2]:<12} qty {r[3]:<6} {r[4]}/{r[5]}/{r[6]} "
+              f"[{r[7]}] {r[8]:<9} {str(r[9])[:60]}")
+    return 0
+
+
+def cmd_plan_mark(args) -> int:
+    from indtrader.execution.planlog import PlanLog
+
+    if args.status not in ("executed", "cancelled", "stale"):
+        print("status must be executed|cancelled|stale (an executed BUY normally arrives "
+              "via: fill ... --plan ID)", file=sys.stderr)
+        return 1
+    log = PlanLog()
+    row = log.con.execute("SELECT id, symbol, status FROM plans WHERE id=?", [args.id]).fetchone()
+    if row is None:
+        print(f"no plan #{args.id}", file=sys.stderr)
+        log.close()
+        return 1
+    log.mark(args.id, args.status)
+    log.close()
+    print(f"plan #{args.id} ({row[1]}): {row[2]} -> {args.status}")
+    return 0
+
+
+def cmd_attribution(args) -> int:
+    """Plan §D monthly attribution: realized P&L by SETUP x index-trend-at-entry.
+    Lot->plan link: most recent executed plan for the symbol created on/before the
+    lot's buy date; no plan = 'unplanned' (visible, not hidden)."""
+    from datetime import datetime as _dt
+
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.portfolio.actions import apply_actions, load_actions
+    from indtrader.portfolio.tax import realize
+
+    store = BarStore()
+    log = PlanLog()
+    try:
+        entries = [e for e in apply_actions(log.fills(), load_actions(log))
+                   if not e.symbol.upper().startswith("MF:")]
+        if not entries:
+            print("no fills yet")
+            return 0
+        idx = store.load(args.index)
+        closes = pd.to_datetime(idx.index).date if not idx.empty else []
+        s = idx["close"].astype(float) if not idx.empty else None
+        sma_ok = s is not None and len(s) >= 50
+        sma_vals = s.rolling(200, min_periods=50).mean() if sma_ok else None
+
+        def trend(d):
+            if not sma_ok:
+                return "?"
+            days = list(closes)
+            prior = [x for x in days if x <= d]
+            if not prior:
+                return "?"
+            i = days.index(max(prior))
+            v, c = sma_vals.iloc[i], float(s.iloc[i])
+            if pd.isna(v):
+                return "?"
+            return "up" if c > v else "down"
+
+        plans = log.con.execute(
+            "SELECT created, symbol, setup FROM plans WHERE status='executed' ORDER BY created").fetchall()
+        agg = {}
+        for m in realize(entries):
+            setup = "unplanned"
+            for created, psym, psetup in plans:
+                if psym == m.symbol and _dt.strptime(str(created)[:10], "%Y-%m-%d").date() <= m.buy_dt:
+                    setup = psetup or "manual"
+            tag = (setup, trend(m.buy_dt))
+            r = agg.setdefault(tag, {"n": 0, "wins": 0, "net": 0.0})
+            r["n"] += 1
+            r["wins"] += 1 if m.net > 0 else 0
+            r["net"] += m.net
+        if not agg:
+            print("no realized lots yet")
+            return 0
+        rows = [{"setup": k[0], "trend_at_entry": k[1], "lots": v["n"],
+                 "win_rate": round(v["wins"] / v["n"], 2), "net": round(v["net"], 0)}
+                for k, v in sorted(agg.items())]
+        print(pd.DataFrame(rows).to_string(index=False))
+        print("retro-tagged from plans+bars (trend = index vs its 200-DMA at the lot's buy "
+              "date); unplanned = fill without an executed plan.")
+        return 0
+    finally:
+        store.close()
+        log.close()
+
+
+def cmd_compare(args) -> int:
+    """Plan §D A/B compare: same symbol, window, costs — every strategy side by side."""
+    from indtrader.backtest.costs import DeliveryCosts
+    from indtrader.backtest.engine import Backtester
+    from indtrader.backtest.strategies import REGISTRY
+
+    df = _load_or_fetch(BarStore(), args.symbol, adjusted=args.adjusted)
+    if df.empty:
+        print("no data", file=sys.stderr)
+        return 1
+    names = ([s.strip() for s in args.strategies.split(",")] if args.strategies
+             else sorted(REGISTRY))
+    rows = []
+    gross = DeliveryCosts(stt_buy=0.0, stt_sell=0.0, exchange_txn=0.0, sebi=0.0,
+                          stamp_duty_buy=0.0, cgst_on_charges=0.0, slbm_buy=0.0, slippage=0.0)
+    for n in names:
+        if n not in REGISTRY:
+            print(f"unknown strategy '{n}' (have: {', '.join(sorted(REGISTRY))})", file=sys.stderr)
+            return 1
+        res = Backtester(costs=DeliveryCosts() if args.costs else gross) \
+            .run(df, REGISTRY[n](), symbol=args.symbol.upper())
+        sm = res.summary()
+        rows.append({"strategy": n, "trades": sm.get("trades"), "cagr": sm.get("cagr"),
+                     "sharpe": sm.get("sharpe"), "maxdd": sm.get("max_drawdown"),
+                     "win_rate": sm.get("win_rate"), "profit_factor": sm.get("profit_factor")})
+    bh = float(df["close"].iloc[-1] / df["close"].iloc[0] - 1)
+    print(pd.DataFrame(rows).to_string(index=False))
+    print(f"(buy&hold total {bh:+.1%} — a strategy must beat this AFTER costs to deserve capital)")
     return 0
 
 
@@ -796,7 +1242,12 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("fetch"); s.add_argument("symbol"); s.set_defaults(fn=cmd_fetch)
-    s = sub.add_parser("fetch-universe"); s.add_argument("--file", default=None); s.set_defaults(fn=cmd_fetch_universe)
+    s = sub.add_parser("fetch-universe")
+    s.add_argument("--file", default=None)
+    s.add_argument("--skip-fresh", dest="skip_fresh", action="store_true",
+                   help="skip symbols whose tail is current AND history reaches --start "
+                        "(resume-friendly backfill; nightly loop does this by default)")
+    s.set_defaults(fn=cmd_fetch_universe)
     s = sub.add_parser("backtest")
     s.add_argument("symbol")
     s.add_argument("--strategy", default="trend_sma200")
@@ -812,7 +1263,43 @@ def main(argv=None) -> int:
     s.add_argument("--index", default="NIFTY")
     s.add_argument("--top", type=int, default=10)
     s.add_argument("--no-journal", action="store_true", help="don't write the shortlist to the signal journal")
+    s.add_argument("--max-stale", dest="max_stale", type=int, default=5,
+                   help="dead-man: refuse scan if index's last bar is older than N business days (default 5)")
+    s.add_argument("--ignore-stale", action="store_true", help="override the dead-man (not recommended)")
     s.set_defaults(fn=cmd_scan)
+    s = sub.add_parser("harvest", help="pre-March tax-loss harvesting candidates from open FIFO lots")
+    s.add_argument("--asof", default=None, help="YYYY-MM-DD (default today)")
+    s.set_defaults(fn=cmd_harvest)
+    s = sub.add_parser("decay", help="paper book vs the strategy's own Monte-Carlo expectation band")
+    s.add_argument("symbol")
+    s.add_argument("--strategy", default="trend_sma200")
+    s.add_argument("--capital", type=float, default=100_000.0)
+    s.add_argument("--window", type=int, default=None, help="rolling paper window size (default 20)")
+    s.set_defaults(fn=cmd_decay)
+    s = sub.add_parser("import-csv", help="seed the fills ledger from a broker tradebook CSV")
+    s.add_argument("file")
+    s.add_argument("--format", default="generic", help="generic | zerodha-tradebook | angel (or use --map)")
+    s.add_argument("--map", default=None, help="field=column pairs, e.g. dt=Trade Date,symbol=Symbol")
+    s.add_argument("--dry-run", dest="dry_run", action="store_true")
+    s.add_argument("--apply", action="store_true", help="actually write (default refuses)")
+    s.set_defaults(fn=cmd_import_csv)
+    s = sub.add_parser("shareholding", help="QoQ ownership deltas for holdings (record/fetch/list/alert)")
+    s.add_argument("symbol", nargs="?", default=None)
+    s.add_argument("--fetch", default=None, help="probe live shape for this symbol, store raw")
+    s.add_argument("--set", default=None, help="record a quarter: SYM@PERIOD:promoter:fii:dii:public:pledge")
+    s.add_argument("--holdings", default="", help="comma list for the alert view")
+    s.set_defaults(fn=cmd_shareholding)
+    s = sub.add_parser("backup", help="online-backup bars+plans, integrity-check, prune to --keep")
+    s.add_argument("--dest", default=None)
+    s.add_argument("--keep", type=int, default=14)
+    s.set_defaults(fn=cmd_backup)
+    s = sub.add_parser("restore", help="restore one store from a verified backup")
+    s.add_argument("kind", choices=["bars", "plans"])
+    s.add_argument("backup")
+    s.set_defaults(fn=cmd_restore)
+    s = sub.add_parser("dashboard", help="read-only one-page web dashboard on 127.0.0.1")
+    s.add_argument("--port", type=int, default=8765)
+    s.set_defaults(fn=cmd_dashboard)
     s = sub.add_parser("fetch-feeds"); s.add_argument("--days", type=int, default=7); s.set_defaults(fn=cmd_fetch_feeds)
     s = sub.add_parser("fetch-adj", help="store corporate-action factors (yfinance Adj Close / Close)")
     s.add_argument("symbols", nargs="*")
@@ -825,6 +1312,17 @@ def main(argv=None) -> int:
     s.add_argument("--max-missing", dest="max_missing", type=int, default=2)
     s.add_argument("--max-stale", dest="max_stale", type=int, default=3)
     s.set_defaults(fn=cmd_health)
+    s = sub.add_parser("contract-test",
+                       help="store closes vs NSE bhavcopy for one session (Phase-1 acceptance)")
+    s.add_argument("--file", default=None)
+    s.add_argument("--date", default=None, help="session YYYY-MM-DD (default: store's newest)")
+    s.add_argument("--tolerance", type=float, default=0.01)
+    s.add_argument("--min-checked", dest="min_checked", type=int, default=5)
+    s.set_defaults(fn=cmd_contract_test)
+    s = sub.add_parser("holidays", help="NSE CBM trading-holiday calendar + cross-check vs NIFTY bars")
+    s.add_argument("--year", type=int, default=None)
+    s.add_argument("--index", default="NIFTY")
+    s.set_defaults(fn=cmd_holidays)
     s = sub.add_parser("notify"); s.set_defaults(fn=cmd_notify)
     s = sub.add_parser("bot", help="Telegram command interface (long-poll; reads + journal only)")
     s.set_defaults(fn=cmd_bot)
@@ -875,7 +1373,36 @@ def main(argv=None) -> int:
     s.add_argument("--date", default=None, help="YYYY-MM-DD (default: today)")
     s.add_argument("--costs", type=float, default=0.0, help="all-in costs of this fill (STT/stamp/GST...)")
     s.add_argument("--note", default="")
+    s.add_argument("--plan", type=int, default=None,
+                   help="id of the OPEN written plan this fill executes (marks it executed)")
     s.set_defaults(fn=cmd_fill)
+    s = sub.add_parser("plan", help="write a BUY plan (mandatory reason; stop < entry < target)")
+    s.add_argument("symbol")
+    s.add_argument("action", choices=["BUY"])
+    s.add_argument("--qty", type=int, required=True)
+    s.add_argument("--entry", type=float, required=True)
+    s.add_argument("--stop", type=float, required=True)
+    s.add_argument("--target", type=float, required=True)
+    s.add_argument("--reason", default="", help="written rationale, >= 10 chars — mandatory")
+    s.add_argument("--setup", default="", help="breakout | pullback | rotation-en | manual")
+    s.set_defaults(fn=cmd_plan)
+    s = sub.add_parser("plans", help="list plans (open first; --all for everything recent)")
+    s.add_argument("--all", action="store_true")
+    s.set_defaults(fn=cmd_plans)
+    s = sub.add_parser("plan-mark", help="set a plan's status by hand (executed|cancelled|stale)")
+    s.add_argument("id", type=int)
+    s.add_argument("status")
+    s.set_defaults(fn=cmd_plan_mark)
+    s = sub.add_parser("attribution", help="realized P&L by setup x index-trend-at-entry")
+    s.add_argument("--index", default="NIFTY")
+    s.set_defaults(fn=cmd_attribution)
+    s = sub.add_parser("compare", help="A/B every strategy on one symbol, same window and costs")
+    s.add_argument("symbol")
+    s.add_argument("--strategies", default=None, help="comma list (default: all in REGISTRY)")
+    s.add_argument("--costs", action="store_true",
+                   help="apply full delivery costs + slippage (default: gross, none)")
+    s.add_argument("--adjusted", action="store_true", help="use adjusted bars")
+    s.set_defaults(fn=cmd_compare)
     s = sub.add_parser("tax", help="FIFO realized P&L + CGT estimate per financial year")
     s.add_argument("--setoff", action="store_true",
                    help="apply loss set-off order + 8-year carry-forward instead of the upper bound")

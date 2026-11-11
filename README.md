@@ -13,13 +13,13 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 
 | Command | Purpose |
 |---|---|
-| `fetch RELIANCE` / `fetch-universe` | Download daily candles into the local store (NSE archive via NseIndiaApi, Yahoo fallback) |
+| `fetch RELIANCE` / `fetch-universe [--skip-fresh]` | Download daily candles into the local store (NSE archive via NseIndiaApi, Yahoo fallback); `--skip-fresh` skips symbols already complete-and-current (the nightly loop uses it by default, so re-runs cost milliseconds, not 10 years × 500 symbols) |
 | `backtest SYM --strategy X --costs` | Daily-bar backtest with real Indian delivery costs and next-bar-open fills |
 | `rrg SYM SYM ... --bench NIFTY` | Clean-room Relative Rotation Graph: quadrant + quadrant transitions |
 | `scan` | Universe shortlist: one evidence row per symbol (trend, RRG quadrant, 6m momentum, delivery %, bulk deals, 20d turnover, compression, vol), ranked; illiquid names (<₹2Cr/day before the signal) dropped; shortlist journaled to `plans.sqlite` |
 | `fetch-feeds` | Nightly evidence refresh: delivery-% bhavcopy + bulk deals (NSE; keeps last-known when unreachable) |
 | `notify` | Evening briefing (regime + shortlist): sends to Telegram when configured, prints otherwise |
-| `bot` | Telegram command interface (long-poll, no public webhook): /status /book /scan /events /ann /fill /pause — chat-id-pinned, and the command registry can't contain order verbs (test-enforced) |
+| `bot` | Telegram command interface (long-poll, no public webhook): /status /book /scan /events /ann /plan /plans /fill /pause — chat-id-pinned, and the command registry can't contain order verbs (test-enforced) |
 | `pause` / `resume` | Quiet-switch for the daily outbound loop (flag file in DATA_DIR, survives restarts) |
 | `reconcile` | Journal vs broker holdings (Fyers read-only token): reports mismatches, never acts on them |
 | `fill SYM SIDE QTY PX --costs N` | Record an actual fill into the tax ledger |
@@ -38,10 +38,23 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `rebalance --file targets.json` | Monthly rebalance proposals vs target weights with the tax lens on every sell; unknown marks size 0, never guessed; proposals only |
 | `riskreport` | Weekly report: regime light + flip/FTD note, book XIRR + concentration, journal counts, universe data health |
 | `health` | Data-health gate vs the NIFTY session calendar: rows, gaps, staleness, adj coverage; exit 1 on breaches |
+| `contract-test` | Phase-1 acceptance: store closes vs NSE's own bhavcopy (`TckrSymb`/`ClsPric` contract, captured live — never guessed); names every mismatch, exit 1 on any |
+| `holidays` | NSE CBM trading-holiday calendar + cross-check that no holiday has a NIFTY bar |
 | `fetch-adj` | Store corporate-action factors (yfinance Adj Close/Close); `backtest --adjusted` uses them, warns on RAW fallback |
 | `ann` | Announcement triage for HOLDINGS only: RED (fraud/pledge-encroachment/NCLT…) vs AMBER keywords; empty book = empty alert, never a firehose |
 | `events [SYM --qty N]` | Results calendar + the plan's event rule: no fresh entry ≤2 sessions before earnings, half size ≤5; unknown date = guard off, stated |
 | `review` | Sunday review: benchmark week + regime, book vs executed plans (fills without a plan are flagged), journal hygiene, holding announcements, data health |
+| `plan SYM BUY --qty --entry --stop --target --reason "..."` | Written plan (Phase-4 door): rationale mandatory, stop<entry<target enforced at creation |
+| `plans [--all]` / `plan-mark ID STATUS` | Plan journal: open-first list, manual executed/cancelled/stale close-outs |
+| `fill ... --plan ID` | Fill that executes an OPEN plan: ledger note keeps `plan#N` trace, plan flips to executed, per-fill slippage vs the planned entry printed; unknown/closed plans refused |
+| `attribution [--index]` | Realized P&L by setup × index-trend-at-entry; fills without a plan show as `unplanned`, missing index = `?` — never hidden |
+| `compare SYM [--strategies a,b] [--costs]` | A/B every strategy on the same window; default gross, `--costs` for full STT/slippage; prints the buy&hold bar to beat |
+| `harvest [--asof]` | Pre-March candidates from open FIFO lots × marks × FY realized LTCG: loss-harvest / free basis-reset (inside exemption) / taxable reset priced at 12.5%; unmarked symbols skipped and NAMED. Computation, not advice |
+| `decay SYM --strategy X` | Paper trades vs the strategy's own bootstrap band (p5/p95 + rolling windows); thin baseline refuses to judge; a breach prints REVIEW — a human decides |
+| `import-csv FILE [--format f] [--map ...]` | Broker tradebook seeding: contract-first parse, bad row aborts naming the row, re-runs dedup, NOTHING writes without `--apply` |
+| `shareholding [SYM] [--fetch\|--set ...]` | QoQ ownership deltas (promoter −2% / FII exit / pledge ↑). Live side is probe-only: stores raw JSON + prints row keys, never guesses the shape |
+| `backup [--keep N]` / `restore KIND FILE` | Sqlite online backup (safe mid-ETL) + `PRAGMA integrity_check` on every copy; restore refuses corrupt backups, keeps `.pre-restore` |
+| `dashboard [--port 8765]` | Read-only one-page web UI on 127.0.0.1: banner (NIFTY + staleness + PAUSED), book vs plans, open plans, last scan, journal gaps, health strip. Stdlib only, zero write paths |
 | `universe --index "nifty 50" --out data/universe.txt` | Dump live index constituents to a universe file |
 | `regime` | Market traffic-light (breadth + index trend) → recommended exposure 100/60/30%, plus the exact levels that would flip the light and the follow-through (FTD) status |
 | `ai SYM` | Optional AI view. Works keyless (deterministic factpack); add any model key later |
@@ -124,19 +137,26 @@ strictly, can be rejected, and can never size or place a trade.
 Implemented: data chain + store, costs, backtester + 6 strategies, portfolio-level backtest,
 walk-forward + plateau GATE, Monte Carlo bootstrap, RRG, regime (+ flip levels, + FTD
 internals), scanner (+ pre-signal liquidity floor, + compression base, + results-proximity
-notes), evidence feeds (delivery/bulk deals), announcement triage (holdings-only RED/AMBER),
-results calendar + entry size gate, session calendar + health gate, corporate-action adj
-factors, sizing/limits, journal, tax ledger (FIFO + CGT + statutory loss set-off with
-8-year carry-forward), book XIRR from the fills ledger, risk-balanced weights (inverse-vol
-+ HRP w/ fallback), weekly risk report, Sunday review generator, Fyers read-only
-reconciliation, Telegram briefings AND a
+notes, + dead-man staleness gate vs today), evidence feeds (delivery/bulk deals),
+announcement triage (holdings-only RED/AMBER), results calendar + entry size gate, session
+calendar + health gate, bhavcopy contract test + holiday calendar (both live-confirmed),
+corporate-action adj factors, sizing/limits, plan journal with a written-plan front door
+(`plan`/`plans`/`plan-mark`, `fill --plan` link), realized-vs-plan attribution (setup ×
+trend-at-entry), strategy A/B `compare`, tax ledger (FIFO + CGT + statutory loss set-off
+with 8-year carry-forward), tax-loss harvest candidates, paper-vs-backtest decay monitor,
+book XIRR, risk-balanced weights (inverse-vol + HRP w/ fallback), weekly risk report,
+Sunday review generator, shareholding-pattern deltas (live side probe-only), broker CSV
+import (contract-first, `--apply`-gated), sqlite backup/restore with integrity checks,
+read-only web dashboard (stdlib, loopback), Fyers read-only reconciliation, Telegram
+briefings AND a
 chat-pinned command bot (reads + journal only — no order path exists), pause/resume loop
 switch, ETL+Docker, AI router (+ grounding rules, contract
 evals, falsifier field), freshness CI.
-Phases 1–3 of the plan are code-complete; the live-data half (Nifty-500 backfill, bhavcopy
-contract test, 10y walk-forward runs) is gated on docs/HOME-VALIDATION.md — this network
-blocks NSE/Yahoo. Phase 4 (paper loop, 6–8 weeks) starts from that same checklist.
-Phase 6 (investing leg) is feature-complete offline and live-verified where possible:
+Phases 1–3 of the plan are code-complete; the live-data half (Nifty-500 backfill finish,
+10y walk-forward runs on the laptop, shareholding payload probe) runs on the <PERSON>
+per ROUND3-TODO.md — this network blocks NSE/Yahoo. Phase 4 (paper loop, 6–8 weeks)
+starts from that same checklist; its discipline tooling (plans, attribution, decay,
+dead-man) is all in. Phase 6 (investing leg) is feature-complete offline and live-verified where possible:
 MF NAV layer (AMFI is NOT blocked — 14,445 NAVs stored, contract-probe green, 2026-11-10),
 SIP ledger with fractional units, dividend/corporate-action ledger (cost-basis-correct
 FIFO treatment, dividend income in the tax sheet, redemption sells synthesized),
@@ -144,5 +164,5 @@ rebalance proposals with the tax lens, MF slice + CA income surfaced in review a
 riskreport. Phase 5 stays gated on
 Phase 4 passing, per plan; its buildable surface already exists (read-only reconcile,
 journal, sizing).
-Next: the laptop session (HOME-VALIDATION §1–§4), then the Phase-4 clock; deferred backlog:
-screener.in fundamentals (where the endpoint is verifiable), dashboard UI.
+Next: the laptop session (ROUND3-TODO.md), then the Phase-4 clock; deferred backlog:
+screener.in fundamentals (where the endpoint is verifiable).
