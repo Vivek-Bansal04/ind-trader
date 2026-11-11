@@ -133,7 +133,9 @@ class BarStore:
             "SELECT d, factor FROM adj_factors WHERE symbol=? ORDER BY d", [symbol.upper()]).fetchall()
         if not r:
             return pd.Series(dtype="float64")
-        return pd.Series([v for _, v in r], index=pd.to_datetime([d for d, _ in r]), name="factor")
+        return pd.Series([v for _, v in r],
+                         index=pd.to_datetime([d for d, _ in r], format='mixed'),
+                         name="factor")
 
     # --- split factors (from NSE corporate-actions records) ---
     def upsert_split_factors(self, symbol: str, factors: dict) -> int:
@@ -148,7 +150,9 @@ class BarStore:
             "SELECT d, ratio FROM split_factors WHERE symbol=? ORDER BY d", [symbol.upper()]).fetchall()
         if not r:
             return pd.Series(dtype="float64")
-        return pd.Series([v for _, v in r], index=pd.to_datetime([d for d, _ in r]), name="ratio")
+        return pd.Series([v for _, v in r],
+                         index=pd.to_datetime([d for d, _ in r], format='mixed'),
+                         name="ratio")
 
     def combined_factors(self, symbol: str) -> pd.Series:
         """Merge yfinance back-adjustment factors with recorded split ratios —
@@ -203,7 +207,9 @@ class BarStore:
             prev = b[b.index < D]
             step = 1.0
             if D in b.index and len(prev):
-                step = float(b.loc[D]) / float(prev.iloc[-1])
+                bv = b.loc[D]
+                bv = bv.iloc[-1] if hasattr(bv, 'iloc') else bv
+                step = float(bv) / float(prev.iloc[-1])
             # back-adjusted factors step UP by 1/r on an action day — if yf's
             # step matches the recorded split, yf already priced it.
             if abs(step * r - 1.0) <= 0.02:
