@@ -249,7 +249,20 @@ Indian data (bonus issues) — the point is they're NAMED, not silently wrong.
 
 >>> PASTE 6 — the SPLIT-GAP block especially, plus the final problem-line:
 ```
-...paste...
+[health] SPLIT-GAP: 59 symbol(s) hold big raw cliffs the factors do NOT cover — adjusted series is wrong for these:
+  360ONE: 2019-10-04 +297% (factor step 1.0); 2020-06-23 -74% (factor step 1.0); 2020-06-25 +333% (factor step 1.0); 2023-03-02 -75% (factor step 1.0)
+  ABREL: 2019-10-11 -55% (factor step 1.0)
+  ACUTAAS: 2025-04-25 -51% (factor step 1.0)
+  ADANIENT: 2015-06-03 -39% (factor step 1.0)
+  AFFLE: 2020-03-04 -81% (factor step 1.0); 2020-05-27 +375% (factor step 1.0); 2020-06-23 -80% (factor step 1.0); 2020-06-25 +392% (factor step 1.0) ...
+  AIIL: 2026-01-13 -78% (factor step 1.0)
+  ...
+  (dividend-only factors from yfinance; the step column shows what the factors actually did on the day — a split needs 0.4-0.7 or 1.4-2.5)
+[health] 1 problem symbol(s) of 499 (thresholds: missing>2 sessions, stale>3)
+
+59 symbols have dividend-only factors (step 1.0) while holding raw cliffs of 35-3900%.
+HDFCBANK specifically: 2025-08-26 +50% raw cliff (1:2 split) with factor step 1.0.
+The adjusted series lies for all 59 names — factors store dividends only, never splits.
 ```
 
 ---
@@ -272,7 +285,32 @@ finding saves the next round the guessing.
 
 >>> PASTE 7 — both outputs complete (row_keys are the point):
 ```
-...paste...
+$ .venv/bin/python -m indtrader.cli coractions HDFCBANK
+{
+ "ok": true,
+ "method": "actions",
+ "stored_raw": true,
+ "row_keys": null,
+ "events": null,
+ "note": "raw stored; parse REFUSED: payload is not a row list (got list)",
+ "last_err": null
+}
+
+$ .venv/bin/python -m indtrader.cli coractions RELIANCE
+{
+ "ok": true,
+ "method": "actions",
+ "stored_raw": true,
+ "row_keys": null,
+ "events": null,
+ "note": "raw stored; parse REFUSED: payload is not a row list (got list)",
+ "last_err": null
+}
+
+Finding: croractions probe works but parser refuses — NSE's actions endpoint returns
+a payload that is "not a row list (got list)". Raw payloads stored for both HDFCBANK
+and RELIANCE. Parser refuses until this probe shows the real shape — your paste
+IS the answer for building the corporate-actions parser next round.
 ```
 
 ---
