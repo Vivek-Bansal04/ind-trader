@@ -13,38 +13,109 @@ You place the order yourself in your broker app. Humans click, machines advise.
 ## What it actually is
 
 A very disciplined researcher who works for you every evening on your own
-laptop. Six parts:
+laptop. Six parts — each one below says where its data comes from and how it
+decides, in the same words the code uses:
 
-1. **The Collector** — at 4:05 PM each market day it downloads closing prices
-   for ~500 Indian stocks + the NIFTY index, news about companies you hold,
-   exchange announcements, and the holiday calendar. Everything lands in one
-   file on your laptop. Nothing in the cloud, nothing at a broker.
+### 1. The Collector
 
-2. **The Trust Inspector** — before anything is used, it's checked: a missing
-   trading day? a price that "fell" 50% overnight that is actually an
-   unrecorded stock split? the holiday calendar disagreeing with reality?
-   Anything suspicious is NAMED and SHOWN, never quietly averaged over.
-   Garbage in = loud warning out.
+- **Where the data comes from:** daily closing prices for the
+  ~500-stock universe + NIFTY come from **NSE's own public endpoints** (via an
+  open-source NSE library); if that source fails, it falls back to **Yahoo
+  Finance** and says which one served. Weekly bars are *derived* from the
+  daily ones (week ending Friday, complete weeks only) — one source of truth,
+  never two that can disagree. Company news comes from **Google News
+  RSS** (no API key; fetched in a way that mimics a normal Chrome browser,
+  because the plain method gets blocked on some networks). Exchange
+  announcements, the official holiday list, shareholding patterns and
+  bonus/split records come from **NSE's public data again**. Every response is
+  also saved *exactly as received* (a raw archive), so any number on any page
+  can be traced back to the exchange's own words.
+- **How it decides what to believe:** nothing. The collector is deliberately
+  dumb — it stores, it doesn't judge. Judging is part 2's job. A source that
+  fails is reported as failed; an empty result is distinguished from "couldn't
+  reach" — a dead feed never gets to look like a quiet market.
 
-3. **The Analyst** — reads only the healthy data and answers the questions
-   that matter: *Is the market in a friendly mood?* (recommends 100 / 60 / 30%
-   of your money in stocks), *Which stocks look strong and why?*, *Is anything
-   bad happening in what I own?* (fraud keywords, promoter selling, rating
-   cuts — the same red-flag vocabulary everywhere).
+### 2. The Trust Inspector
 
-4. **The Planner** — every buy idea must exist as a written plan BEFORE it
-   becomes real: entry price, stop-loss (where you were wrong), target (where
-   you were right), and the reason. No plan = no trade. This is what kills
-   "felt like buying" trades.
+- **Where the data comes from:** the collector's own archive — it inspects,
+  it never fetches.
+- **How it decides:** a checklist, each item producing a named suspect, never
+  a silent fix.
+  - *Missing days:* the index's own trading dates are the reference. A stock
+    missing more than 2 sessions against that calendar, or whose data ends
+    more than 3 sessions ago, is named.
+  - *Fake crashes:* any one-day move of ±35% or more must be explained by a
+    recorded split/bonus adjustment of the matching size. A 50% "crash" with
+    only a dividend adjustment behind it is exactly the lie this catches
+    (it caught a real one — HDFCBANK).
+  - *Calendar disputes:* a stored holiday that nonetheless has a NIFTY bar is
+    put on a drift ledger by name.
+  - *Unrecognised shapes:* if NSE changes their data format, the new shape is
+    stored and reported — the parser is only ever extended on a confirmed
+    shape, never guessed.
 
-5. **The Journal & The Page** — what you own, what it's worth, every plan and
-   its status, on one web page that only ever reads and never changes
-   anything. Your history can't be self-deceived about because it's written
-   down.
+### 3. The Analyst
 
-6. **The Time Machine** — takes any rule ("buy when above the 200-day
-   average") and replays it over years of history with real brokerage and
-   tax costs, to show whether it WOULD HAVE made money.
+Three separate jobs, none of them allowed to make up data:
+
+- **The market traffic light** — *inputs:* only the inspected closing prices.
+  Two numbers decide: what fraction of the universe trades above its own
+  200-day average (**breadth**), and whether NIFTY itself is above its
+  200-day average. **ON** (full exposure) needs breadth ≥ 60% *and* NIFTY
+  above its average; **OFF** (cut to 30%) fires if breadth ≤ 35% *or* NIFTY
+  is below; in between (or if either number is unknown) it's **NEUTRAL**
+  (60%). It also prints the exact levels that would flip the light, so the
+  mood is arithmetic, not vibes.
+- **The stock shortlist** — one evidence row per stock, ranked in a strict
+  order: (1) if the light is OFF, nothing is interesting; (2) the trend
+  gate — the stock must be above its own 200-day average, else full stop;
+  (3) relative strength vs NIFTY via the rotation quadrant (stocks turning
+  *upward* relative to the market score highest); (4) 6-month momentum
+  rank. Volatility is shown but never scored — size handles volatility,
+  selection doesn't. Every row carries its numbers so you can argue with it.
+- **The bad-news watcher** — headlines and exchange announcements about
+  *what you own* pass a fixed vocabulary: RED words (fraud, forensic audit,
+  insolvency, pledge encroachment…) and AMBER words (resignation, rating
+  downgrade, delisting, results…). A headline cannot invent a new category.
+  Shareholding adds three tripwires: promoter holding down 2%+ in a quarter,
+  foreign investors pulling out 3%+, or pledge rising — each only if the
+  number is actually present; missing means missing, never zero.
+
+### 4. The Planner
+
+- **Where the data comes from:** the analyst's shortlist + your account
+  size (you tell it once) + the stock's own volatility.
+- **How it works:** an idea becomes a **plan** record with entry, stop,
+  target, and a written reason *before* any order exists. The quantity is
+  arithmetic, not courage: risk 1% of your capital per trade; the stop sits
+  3×ATR below (ATR = the stock's typical daily swing — a noisy stock gets a
+  wider stop and therefore fewer shares, automatically); further caps shrink
+  it if you already own similar stocks (correlation) or if it would exceed
+  the position's allocation. The plan then waits — status `open` — until YOU
+  either place the order yourself at the broker and record the fill, or
+  mark it skipped. The system has no way to place it for you, by design.
+
+### 5. The Journal & The Page
+
+- **Where the data comes from:** the two local database files — one holding
+  all collected market data (with the raw exchange archive), one holding
+  every signal, plan, and fill ever recorded, timestamped.
+- **How it works:** it renders exactly those records, with nothing invented:
+  empty sections say "not fetched yet" or "none", stale data says STALE, and
+  the split-gap/unresolved ledgers stay visible until the underlying facts
+  are fixed. The page physically cannot change a record — it opens the
+  database read-only.
+
+### 6. The Time Machine
+
+- **Where the data comes from:** the same inspected history (and it refuses
+  stocks with unexplained price cliffs rather than scoring on broken data).
+- **How it works:** replay. A rule (say "hold above the 200-day average,
+  exit below") is run day-by-day over years as if it had been followed,
+  with real Indian costs: brokerage, STT, stamp duty, GST, slippage. The
+  honest part is *walk-forward*: the rule is tuned on an early window and
+  tested only on later, unseen data — the same way trading it live would
+  have felt, not the fantasy version where you tune on the test itself.
 
 ## What is deliberately NOT built
 
