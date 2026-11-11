@@ -1,7 +1,9 @@
 # ind-trader — the layman's guide
 
-*(No jargon, no code. The engineer's version is `README.md`. Written 2026-11-12;
-if the two ever disagree, the code wins — but tell me, because that's a bug.)*
+*(No jargon, no code. The engineer's version is `README.md`, and the exact
+formulas — every threshold, fold rule and keyword list as built — are in
+[`docs/ALGORITHMS.md`](docs/ALGORITHMS.md). If any of these ever disagree, the
+code wins — but tell me, because that's a bug. Written 2026-11-12.)*
 
 ## The one-line answer to "when can I buy or sell?"
 

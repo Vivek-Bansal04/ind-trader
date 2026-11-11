@@ -7,6 +7,8 @@ leverage — there is no code path to any of them.**
 
 New here? [`layman-readme.md`](layman-readme.md) explains what this is, how a day
 with it works, and when real money makes sense — no jargon, no code.
+Want the exact math instead? [`docs/ALGORITHMS.md`](docs/ALGORITHMS.md) specifies
+every formula, threshold and fold rule as built — written to be attacked.
 
 Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositories
 (including every fork on this profile). Every design choice is attributable — see
