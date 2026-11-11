@@ -331,10 +331,14 @@ def cmd_holidays(args) -> int:
 
 def cmd_health(args) -> int:
     """Data-health strip: rows, span, missing sessions vs the index calendar, staleness,
-    adjustment coverage. Exits 1 when any symbol crosses the thresholds — a missing
-    candle can fake a trend, so this is a gate, not a report."""
+    adjustment coverage, split-gap. Exits 1 when any symbol crosses the thresholds — a
+    missing candle can fake a trend, so this is a gate, not a report. The split-gap
+    check is a loud print, not a gate: round-4 proved adj_coverage=100% can coexist
+    with an unadjusted 50% split cliff (dividend-only factors), so 'covered' must
+    mean 'covers every big raw move', not 'some factors stored'."""
     from indtrader.research.calendar import index_sessions, missing_sessions, staleness_days
 
+    SPLIT_JUMP = 0.35  # raw one-day move this big is split/bonus until proven otherwise
     store = BarStore()
     try:
         idx = store.load(args.index)
@@ -343,7 +347,7 @@ def cmd_health(args) -> int:
                   file=sys.stderr)
             return 1
         sessions = index_sessions(idx)
-        rows, bad = [], 0
+        rows, bad, split_gaps = [], 0, []
         for sym in sorted(set(load_universe(args.file))):
             df = store.load(sym, validate=False)
             if df.empty:
@@ -355,12 +359,39 @@ def cmd_health(args) -> int:
             stale = staleness_days(df.index, sessions)
             f = store.adj_factors(sym)
             cov = round(float(f.reindex(df.index, method="ffill").ffill().notna().mean()), 3) if len(f) else 0.0
+            # Split-gap: every |raw move| >= 35% must be matched by a factor STEP of
+            # matching size on the same day (F = adj/raw back-adjustment: a 1:2 split
+            # halves closes at d and steps F by ~2.0 there). Dividend steps (~0.985)
+            # leave the cliff in the ADJUSTED series — the exact HDFCBANK lie.
+            gaps = []
+            pct = df["close"].pct_change()
+            for ts, p in pct[pct.abs() >= SPLIT_JUMP].items():
+                d = pd.Timestamp(ts)
+                step = None
+                if len(f):
+                    before = f[f.index < d]
+                    on = f[f.index <= d]
+                    if len(on):  # no factor at/before d at all -> step None -> gap
+                        b = float(before.iloc[-1]) if len(before) else 1.0
+                        step = round(float(on.iloc[-1]) / b, 3) if b else None
+                covered = step is not None and (0.4 <= step <= 0.7 or 1.4 <= step <= 2.5)
+                if not covered:
+                    gaps.append(f"{d.date()} {p:+.0%}" + (f" (factor step {step})" if step else ""))
+            if gaps:
+                split_gaps.append(f"{sym}: " + "; ".join(gaps[:4]) + (" ..." if len(gaps) > 4 else ""))
             rows.append({"symbol": sym, "rows": len(df), "first": str(df.index[0].date()),
                          "last": str(df.index[-1].date()), "missing_sessions": int(len(miss)),
                          "stale_sessions_ago": stale, "adj_coverage": cov})
             if len(miss) > args.max_missing or (stale if stale is not None else 10**9) > args.max_stale:
                 bad += 1
         print(pd.DataFrame(rows).to_string(index=False))
+        if split_gaps:
+            print(f"[health] SPLIT-GAP: {len(split_gaps)} symbol(s) hold big raw cliffs the "
+                  f"factors do NOT cover — adjusted series is wrong for these:")
+            for g in split_gaps[:args.max_gaps]:
+                print("  " + g)
+            print("  (dividend-only factors from yfinance; the step column shows what the "
+                  "factors actually did on the day — a split needs 0.4-0.7 or 1.4-2.5)")
         print(f"[health] {bad} problem symbol(s) of {len(rows)} "
               f"(thresholds: missing>{args.max_missing} sessions, stale>{args.max_stale})")
         return 1 if bad else 0
@@ -748,6 +779,26 @@ def cmd_shareholding(args) -> int:
                                            if s.strip()] if args.holdings else [])
         print("\n".join(alerts) if alerts else "no shareholding red deltas on holdings")
         return 0
+    finally:
+        store.close()
+
+
+def cmd_coractions(args) -> int:
+    """Probe-only corporate-actions fetch (the split-factor cure, round-5 probe):
+    stores the raw payload + prints row keys; parse refuses until shape confirmed."""
+    from indtrader.data.nseapi_provider import NseIndiaApiProvider
+
+    if not NseIndiaApiProvider.available():
+        print("coractions needs the nse lib (pip install 'indtrader[nse]') — run on the laptop",
+              file=sys.stderr)
+        return 2
+    from indtrader.research import coractions as ca
+
+    store = BarStore()
+    try:
+        out = ca.try_fetch(store, args.symbol)
+        print(json.dumps(out, indent=1, default=str))
+        return 0 if out["ok"] else 1
     finally:
         store.close()
 
@@ -1360,6 +1411,10 @@ def main(argv=None) -> int:
     s.add_argument("--set", default=None, help="record a quarter: SYM@PERIOD:promoter:fii:dii:public:pledge")
     s.add_argument("--holdings", default="", help="comma list for the alert view")
     s.set_defaults(fn=cmd_shareholding)
+    s = sub.add_parser("coractions",
+                       help="probe corporate actions (split factors) - raw stored, parse awaits shape")
+    s.add_argument("symbol")
+    s.set_defaults(fn=cmd_coractions)
     s = sub.add_parser("backup", help="online-backup bars+plans, integrity-check, prune to --keep")
     s.add_argument("--dest", default=None)
     s.add_argument("--keep", type=int, default=14)
@@ -1382,6 +1437,8 @@ def main(argv=None) -> int:
     s.add_argument("--index", default="NIFTY")
     s.add_argument("--max-missing", dest="max_missing", type=int, default=2)
     s.add_argument("--max-stale", dest="max_stale", type=int, default=3)
+    s.add_argument("--max-gaps", dest="max_gaps", type=int, default=20,
+                   help="how many split-gap symbols to list (they are printed, never silently dropped)")
     s.set_defaults(fn=cmd_health)
     s = sub.add_parser("contract-test",
                        help="store closes vs NSE bhavcopy for one session (Phase-1 acceptance)")

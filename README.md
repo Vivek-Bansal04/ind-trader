@@ -37,7 +37,7 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `actions` | List recorded corporate actions; effects: dividend → XIRR flow + per-FY income (gross/TDS/net) in `tax`, bonus → zero-cost lot, split → FIFO basis rescale, redemption → synthesized SELL |
 | `rebalance --file targets.json` | Monthly rebalance proposals vs target weights with the tax lens on every sell; unknown marks size 0, never guessed; proposals only |
 | `riskreport` | Weekly report: regime light + flip/FTD note, book XIRR + concentration, journal counts, universe data health |
-| `health` | Data-health gate vs the NIFTY session calendar: rows, gaps, staleness, adj coverage; exit 1 on breaches |
+| `health` | Data-health gate vs the NIFTY session calendar: rows, gaps, staleness, adj coverage; exit 1 on breaches. Plus the split-gap check: every ±35% raw move must have a matching factor step — `adj_coverage=100%` can no longer hide an unadjusted split cliff (round-4 HDFCBANK lie) |
 | `contract-test` | Phase-1 acceptance: store closes vs NSE's own bhavcopy (`TckrSymb`/`ClsPric` contract, captured live — never guessed); names every mismatch, exit 1 on any |
 | `holidays` | NSE CBM trading-holiday calendar + cross-check that no holiday has a NIFTY bar |
 | `fetch-adj` | Store corporate-action factors (yfinance Adj Close/Close); `backtest --adjusted` uses them, warns on RAW fallback |
@@ -52,7 +52,8 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `harvest [--asof]` | Pre-March candidates from open FIFO lots × marks × FY realized LTCG: loss-harvest / free basis-reset (inside exemption) / taxable reset priced at 12.5%; unmarked symbols skipped and NAMED. Computation, not advice |
 | `decay SYM --strategy X` | Paper trades vs the strategy's own bootstrap band (p5/p95 + rolling windows); thin baseline refuses to judge; a breach prints REVIEW — a human decides |
 | `import-csv FILE [--format f] [--map ...]` | Broker tradebook seeding: contract-first parse, bad row aborts naming the row, re-runs dedup, NOTHING writes without `--apply` |
-| `shareholding [SYM] [--fetch\|--set ...]` | QoQ ownership deltas (promoter −2% / FII exit / pledge ↑). Live side is probe-only: stores raw JSON + prints row keys, never guesses the shape |
+| `shareholding [SYM] [--fetch\|--set ...]` | QoQ ownership deltas (promoter −2% / FII exit / pledge ↑). Live side parses the round-4-CONFIRMED quarterly-pattern shape (promoter/public only — FII/DII/pledge aren't in that payload and stay NULL, never zeroed); unknown shapes still refuse loudly |
+| `coractions SYM` | Probe-only corporate-actions fetch (the split-factor cure): stores raw payload + prints row keys; parse refuses until the shape is confirmed live |
 | `backup [--keep N]` / `restore KIND FILE` | Sqlite online backup (safe mid-ETL) + `PRAGMA integrity_check` on every copy; restore refuses corrupt backups, keeps `.pre-restore` |
 | `dashboard [--port 8765]` | Read-only one-page web UI on 127.0.0.1: banner (NIFTY + staleness + PAUSED), book vs plans, open plans, last scan, journal gaps, health strip. Stdlib only, zero write paths |
 | `universe --index "nifty 50" --out data/universe.txt` | Dump live index constituents to a universe file |

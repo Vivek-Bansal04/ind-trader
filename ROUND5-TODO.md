@@ -5,8 +5,8 @@ universe went whole (500/500), the scan runs in 25s, and NSE's own feed is
 confirmed as primary. This round closes Phase 1 formally, does forensics on
 the phantom trading days, and starts the Phase-4 ETL discipline.
 
-Code changes pulled this round (pushed as `c12bb98` — your pull must include
-it or STOP):
+Code changes pulled this round (two commits: `c12bb98` and "Split-gap health
+check + corporate-actions probe" — your pull must include both or STOP):
 
 - `contract-test` now steps back over days whose bhav file isn't published
   yet (that was the round-4 traceback), so it works at ANY time of day.
@@ -22,7 +22,7 @@ Start with:
 ```bash
 cd ~/Desktop/ind-trader
 git pull
-git log --oneline -1   # must be c12bb98 or newer
+git log --oneline -3   # must include "Split-gap health check + corporate-actions probe"
 ```
 
 ---
@@ -143,6 +143,49 @@ into a note; we'll pull the note in a later round.
 
 ---
 
+## 6. The split-gap check, on real data (new code — validate it)
+
+Pulled with `c12bb98`+ : `health` now checks every ±35% raw move against the
+factors — a dividend-only factor set (the round-4 HDFCBANK lie: coverage 100%,
+split cliff intact) gets NAMED per symbol. On the 500-symbol store this should
+find HDFCBANK for sure, and it will honestly find every other name whose big
+raw move lacks a split-like factor step. A list of a few dozen is plausible in
+Indian data (bonus issues) — the point is they're NAMED, not silently wrong.
+
+```bash
+.venv/bin/python -m indtrader.cli health --file data/universe.txt | tail -30
+```
+
+>>> PASTE 6 — the SPLIT-GAP block especially, plus the final problem-line:
+```
+...paste...
+```
+
+---
+
+## 7. Corporate actions probe — the split-factor cure, probed (new command)
+
+`coractions SYM` is probe-only like shareholding was in round 3: it calls the
+library's corporate-actions method, STORES the raw payload, prints the row
+keys. Its parser refuses until this probe shows the real shape — your paste
+IS the answer. HDFCBANK because we know its split (expect an event ~2025-08-26
+with a 1:2 ratio somewhere in the payload); RELIANCE to see a no-split name.
+
+```bash
+.venv/bin/python -m indtrader.cli coractions HDFCBANK
+.venv/bin/python -m indtrader.cli coractions RELIANCE
+```
+
+If it says `no corporate-actions method in NSE`, paste the whole JSON — that
+finding saves the next round the guessing.
+
+>>> PASTE 7 — both outputs complete (row_keys are the point):
+```
+...paste...
+```
+
+---
+
 ## What each answer decides
 
 | # | Question it settles |
@@ -152,5 +195,7 @@ into a note; we'll pull the note in a later round.
 | 3 | Universe clean of dead wood; FORCEMOT kept or noted |
 | 4 | Shareholding alerts go live (the §B feature completes) |
 | 5 | Phase-4 discipline clock starts with a clean baseline |
+| 6 | How many symbols' adjusted series actually lie (split-gap at scale) |
+| 7 | The corporate-actions shape -> real split factors become buildable |
 
 Done = push this file back. "Didn't run" is a valid answer, a fake paste is not.
