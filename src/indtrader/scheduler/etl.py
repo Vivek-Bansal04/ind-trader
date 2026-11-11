@@ -3,13 +3,32 @@ No scheduler library yet (APScheduler joins Phase 1 with broker APIs)."""
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
+from threading import Lock
 
 from indtrader.config import Settings, get_settings
 from indtrader.data.base import DataSource
 from indtrader.data.store import BarStore
 from indtrader.data.universe import load_universe
 from indtrader.data.yfinance_provider import YFinanceProvider
+
+
+_store_lock = Lock()
+
+
+def _fetch_one(sym: str, providers: list[DataSource], start: str, end: str,
+               pause_s: float) -> tuple[str, object, str | None]:
+    """Fetch daily candles for one symbol from the first provider that yields data."""
+    for prov in providers:
+        try:
+            df = prov.daily(sym, start, end)
+        except Exception:
+            continue
+        if df is not None and not df.empty:
+            return sym, df, prov.name
+        time.sleep(pause_s)
+    return sym, None, None
 
 
 def build_providers(settings: Settings) -> list[DataSource]:
@@ -38,26 +57,26 @@ def build_providers(settings: Settings) -> list[DataSource]:
 
 
 def fetch_universe(symbols: list[str], store: BarStore | None = None, providers: list[DataSource] | None = None,
-                   start: str = "2015-01-01", pause_s: float = 0.3) -> dict[str, int]:
+                   start: str = "2015-01-01", pause_s: float = 0.3,
+                   max_workers: int = 5) -> dict[str, int]:
     providers = providers or build_providers(get_settings())
     store = store or BarStore()
     results: dict[str, int] = {}
     end = (date.today() + timedelta(days=1)).isoformat()
-    for sym in symbols:
-        rows = 0
-        for prov in providers:  # first provider that yields data wins
-            try:
-                df = prov.daily(sym, start, end)
-            except Exception as e:
-                print(f"[etl] {sym}: provider {prov.name} failed: {e}")
-                continue
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_fetch_one, sym, providers, start, end, pause_s): sym
+                   for sym in symbols}
+        for future in as_completed(futures):
+            sym, df, prov_name = future.result()
             if df is not None and not df.empty:
-                rows = store.upsert_candles(sym, "daily", df, prov.name)
-                break
-            time.sleep(pause_s)
-        results[sym] = rows
-        print(f"[etl] {sym}: {rows} rows stored")
-        time.sleep(pause_s)
+                with _store_lock:
+                    rows = store.upsert_candles(sym, "daily", df, prov_name)
+                results[sym] = rows
+                print(f"[etl] {sym}: {rows} rows stored")
+            else:
+                results[sym] = 0
+                print(f"[etl] {sym}: 0 rows stored (no data)")
     return results
 
 
