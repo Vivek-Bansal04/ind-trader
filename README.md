@@ -16,6 +16,38 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 (including every fork on this profile). Every design choice is attributable — see
 [Provenance](#provenance--what-came-from-where) below and `docs/ARCHITECTURE.md`.
 
+## Features at a glance
+
+What this does for you, grouped by the question each part answers:
+
+- **What is the market doing?** — regime traffic light (breadth + index trend →
+  ON/NEUTRAL/OFF with an exposure ceiling and the exact levels that would flip
+  it), universe `scan` ranking names by relative strength, 6-month momentum,
+  delivery % and bulk deals — every shortlist score opens to its own
+  arithmetic (the "why" expander), RRG rotation view, live index constituents.
+- **Can I believe this strategy?** — event backtester with real Indian
+  delivery costs, walk-forward + parameter-plateau GATE (fails the gate → exit
+  2, costs included), Monte-Carlo outcome bands, A/B `compare` of every
+  strategy on one window, portfolio-level backtest with shared cash.
+- **How is MY book doing?** — written-plan journal (mandatory reason, stop <
+  entry < target at the door), fills that link back to their plan,
+  My-holdings panel (FIFO avg cost, marks, P&L, results countdown, headlines),
+  tax ledger (FIFO CGT + statutory set-off + carry-forward), XIRR, MF/SIP
+  slice, tax-loss harvest candidates, rebalance proposals with the tax lens.
+  Everything proposes and records; the click at your broker is always yours.
+- **What should I hear about without opening the laptop?** — one-page
+  dashboard (verdict + "Your moves today" cards), Telegram evening briefing,
+  holdings watchers (results ≤4 days out + clean-good news, each message at
+  most once), RED/AMBER news & announcement triage on your names,
+  shareholding tripwires, a chat-pinned read-only bot, Sunday review.
+- **Is any of this built on broken data?** — freshness heatmap + health gate,
+  bhavcopy contract test vs NSE's own numbers, split-gap ledger +
+  corporate-action cure, holiday-drift ledger, sqlite backup/restore with
+  integrity checks, freshness CI. Unknown prints as unknown; missing never
+  renders as zero or quiet.
+
+Never built, by design: any order path, intraday, F&O, leverage.
+
 ## What it does
 
 | Command | Purpose |
@@ -65,7 +97,7 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `coractions SYM [--from-raw\|--set\|--gap-list]` | The split-factor cure: probe every method/arg-form with a shape inventory; `--from-raw` replays the confirmed-shape parser offline; `--set DATE\|KIND\|RATIO` records one human-confirmed event (ratio = price multiplier) when NSE's text states none; `--gap-list` batch-probes every symbol `health` names. Ratios only from stated numbers or humans — unresolved events are NAMED, never guessed |
 | `news [SYMS] [--no-fetch] [--days]` | External news (Google News RSS, no key) for holdings + MARKET — triaged with the SAME RED/AMBER vocabulary as `ann`, so a headline can't invent a new category. Transport is `data.http` (curl_cffi impersonation where present: the round-5 laptop 403'd plain urllib) and the fetch line names which transport ran. A dead feed prints as an outage, never as a quiet evening; tests are offline |
 | `backup [--keep N]` / `restore KIND FILE` | Sqlite online backup (safe mid-ETL) + `PRAGMA integrity_check` on every copy; restore refuses corrupt backups, keeps `.pre-restore` |
-| `dashboard [--host 127.0.0.1] [--port 8765]` | Read-only one-page web UI: banner (NIFTY + staleness + PAUSED), health strip, ETL/Phase-4 view, freshness heatmap + server-side sparklines (generated SVG — no JS charts, no packages), split-gap ledger (same helper as `health`, can't drift), UNRESOLVED corporate actions, holiday drift ledger, triaged news, shareholding alerts, book vs plans, last scan, journal gaps. Stdlib only, zero write paths; non-loopback bind is an explicit `--host` and prints a no-auth warning (Docker maps it to host loopback) |
+| `dashboard [--host 127.0.0.1] [--port 8765]` | One-page web UI, no order path: verdict + "Your moves today" cards + My-holdings panel, banner (NIFTY + staleness + PAUSED), health strip, ETL/Phase-4 view, freshness heatmap + server-side sparklines (generated SVG — no JS charts, no packages), split-gap ledger (same helper as `health`, can't drift), UNRESOLVED corporate actions, holiday drift ledger, triaged news, shareholding alerts, book vs plans, last scan, journal gaps. Stdlib only; ONE write path — POST /api/journal records a human-ALREADY-executed fill into the same journal `fill` writes (400 on refusal, no other write surface); non-loopback bind is an explicit `--host` and prints a no-auth warning (Docker maps it to host loopback) |
 | `universe --index "nifty 50" --out data/universe.txt` | Dump live index constituents to a universe file |
 | `regime` | Market traffic-light (breadth + index trend) → recommended exposure 100/60/30%, plus the exact levels that would flip the light and the follow-through (FTD) status |
 | `ai SYM` | Optional AI view. Works keyless (deterministic factpack); add any model key later |
@@ -163,7 +195,9 @@ with 8-year carry-forward), tax-loss harvest candidates, paper-vs-backtest decay
 book XIRR, risk-balanced weights (inverse-vol + HRP w/ fallback), weekly risk report,
 Sunday review generator, shareholding-pattern deltas (live side probe-only), broker CSV
 import (contract-first, `--apply`-gated), sqlite backup/restore with integrity checks,
-read-only web dashboard (stdlib, loopback), Fyers read-only reconciliation, Telegram
+read-only web dashboard (stdlib, loopback; since 2026-11-12 a My-holdings panel
++ watchers layer: results-countdown + good-news Telegram alerts, RULES §11.7),
+Fyers read-only reconciliation, Telegram
 briefings AND a
 chat-pinned command bot (reads + journal only — no order path exists), pause/resume loop
 switch, ETL+Docker, AI router (+ grounding rules, contract

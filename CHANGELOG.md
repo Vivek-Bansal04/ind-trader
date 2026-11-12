@@ -604,3 +604,14 @@ All changes made during this session, with commit IDs. Each entry records:
 **Status:** committed  
 **Commit ID:** this commit (same subject as Change 53)  
 **AGENTS.md Rule:** Rule 3 — followed
+
+---
+
+## Change 57: README — Features-at-a-glance section + stale dashboard line cured
+
+**File(s):** `README.md`, `CHANGELOG.md`  
+**What:** Added a "Features at a glance" section grouped by the question each part answers (market view / strategy proof / own book / alerts / data truth) with the never-built list. Cured the dashboard command row still claiming "zero write paths" (untrue since ecd1e7c's journal form — now states the ONE journal write path, no order path) and added the holdings panel + watchers to the Status-&-roadmap "Implemented" list.  
+**Why:** Rule 3 — ecd1e7c left these README spots stale (caught while answering the operator's "which file lists features?" question); the operator then asked for the Features section explicitly.  
+**Status:** committed  
+**Commit ID:** this commit ("README: features at a glance + cure stale dashboard line")  
+**AGENTS.md Rule:** Rule 3 — stale docs cured in a docs-only change; Rule 4 — this entry
