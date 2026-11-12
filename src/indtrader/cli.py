@@ -158,8 +158,8 @@ def cmd_scan(args) -> int:
 
         log = PlanLog()
         picks = table[table["tradable"] == True].head(args.top)  # noqa: E712
-        cols = [c for c in ("symbol", "score", "quadrant", "mom_6m", "deliv_per", "net_bulk",
-                            "turnover_20d", "base_quality", "note") if c in table.columns]
+        cols = [c for c in ("symbol", "score", "quadrant", "mom_6m", "deliv_per", "deliv_avg20",
+                            "net_bulk", "turnover_20d", "base_quality", "note") if c in table.columns]
         log.record_signal(
             "UNIVERSE", "scan",
             {"regime": regime.label, "exposure_scale": regime.exposure_scale,
@@ -793,12 +793,13 @@ def cmd_shareholding(args) -> int:
 
 
 def cmd_coractions(args) -> int:
-    """Corporate actions, four modes: probe (EVERY corporate-actions-ish
+    """Corporate actions, five modes: probe (EVERY corporate-actions-ish
     method/arg-form, shape inventory — round-5's single empty payload proved
     nothing); --from-raw offline replay that BUILDS factors from stored
     payloads; --set for one human-confirmed event when NSE's text states no
-    ratio; and --gap-list to batch-probe every symbol health would name.
-    Parsing stays confirmed-shape-only in every path."""
+    ratio; --resolve offline batch re-parse of ratio-NULL split-like rows with
+    the CURRENT parser; and --gap-list to batch-probe every symbol health
+    would name. Parsing stays confirmed-shape-only in every path."""
     from pathlib import Path
 
     from indtrader.data.universe import load_universe
@@ -816,6 +817,19 @@ def cmd_coractions(args) -> int:
             except ValueError as e:
                 print(f"bad corporate action: {e}", file=sys.stderr)
                 return 2
+
+        if args.resolve:
+            rows = ca.resolve_unresolved(store)
+            done = [r for r in rows if r["ratio"] is not None]
+            for r in done:
+                print(f"RESOLVED  {r['symbol']:<12} {r['date']}  ratio {r['ratio']}  [{r['kind'][:60]}]")
+            for r in rows:
+                if r["ratio"] is None:
+                    print(f"UNRESOLVED {r['symbol']:<12} {r['date']}  [{r['kind'][:70]}]")
+                    print(f"           -> read the exchange record, then: {r['set']}")
+            print(f"coractions --resolve: {len(done)}/{len(rows)} stored-text rows resolved "
+                  "by the CURRENT parser; the rest need human --set (never a guessed ratio)")
+            return 0
 
         if args.gap_list:
             from indtrader.data.nseapi_provider import NseIndiaApiProvider
@@ -914,7 +928,7 @@ def cmd_restore(args) -> int:
 def cmd_dashboard(args) -> int:
     from indtrader.web.dashboard import serve
 
-    return serve(host=args.host, port=args.port)
+    return serve(host=args.host, port=args.port, universe_file=args.universe)
 
 
 def cmd_bot(args) -> int:
@@ -1366,6 +1380,130 @@ def cmd_gate(args) -> int:
     return 0 if rep.passed else 2
 
 
+def cmd_gate_universe(args) -> int:
+    """Batch walk-forward gate with split-gap exclusion — the laptop's 10-year
+    gate run. Symbols with unexplained cliffs are EXCLUDED and counted, never
+    folded. Exit: 1 nothing ran, 2 any executed symbol failed, 0 all passed."""
+    from pathlib import Path
+
+    from indtrader.backtest.costs import DeliveryCosts
+    from indtrader.backtest.strategies import REGISTRY
+    from indtrader.backtest.universegate import run_universe_gate
+    from indtrader.data.universe import load_universe
+
+    grid: dict[str, list] = {}
+    for item in args.param or []:
+        k, _, vs = item.partition("=")
+        if not vs:
+            print(f"bad --param '{item}' (want name=v1,v2,...)", file=sys.stderr)
+            return 1
+        grid[k.strip()] = [float(x) if "." in x else int(x) for x in vs.split(",")]
+    if not grid:
+        print("needs at least one --param, e.g. --param period=150,200,250", file=sys.stderr)
+        return 1
+    store = BarStore()
+    syms = load_universe(Path(args.file)) if args.file else args.symbols
+    if not syms:
+        print("no symbols — pass some or --file universe.txt", file=sys.stderr)
+        return 1
+    if args.include_gappy:
+        print("WARNING: --include-gappy runs folds over UNEXPLAINED split cliffs — "
+              "numbers on those symbols are fiction until factors land", file=sys.stderr)
+    rep = run_universe_gate(store, syms, REGISTRY[args.strategy], grid,
+                            costs=DeliveryCosts(), metric=args.metric,
+                            include_gappy=args.include_gappy,
+                            warmup=args.warmup, test_days=args.test_days,
+                            progress=lambda m: print(f"[gate-universe] {m}"))
+    for r in rep.rows:
+        mark = {"PASS": "OK  ", "FAIL": "FAIL", "EXCLUDED": "SKIP",
+                "TOO_SHORT": "SHORT", "NODATA": "NO-DATA"}.get(r.status, r.status)
+        print(f"{mark:<8} {r.symbol:<14} {r.detail[:130]}")
+    print(rep.summary_line())
+    counts = rep.counts()
+    if not counts.get("PASS", 0) and not counts.get("FAIL", 0):
+        print("nothing was gated — every symbol excluded/missing/short (that is an "
+              "unknown, not a pass)", file=sys.stderr)
+        return 1
+    return 2 if counts.get("FAIL", 0) else 0
+
+
+def cmd_drafts(args) -> int:
+    """Evening DRAFT builder: top scan picks -> plan drafts with evidence in the
+    reason. Without --apply it prints and journals the signal; with --apply the
+    drafts enter the journal as OPEN plans a human then executes or cancels.
+    This never trades — the only path into a position stays: human fills at the
+    broker, `fill --plan` records it."""
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.models import OrderPlan
+    from indtrader.research.paperloop import draft_for
+
+    store = BarStore()
+    log = PlanLog()
+    try:
+        picks = log.con.execute(
+            "SELECT payload FROM signals WHERE source='scan' ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+        if not picks:
+            print("no scan signal stored — run `indtrader scan` first (the draft chain "
+                  "starts from tonight's shortlist, not from nowhere)", file=sys.stderr)
+            return 1
+        data = json.loads(picks[0])
+        rows = data.get("picks") or []
+        scale = float(data.get("exposure_scale") or 1.0)
+        equity = args.equity * scale
+        open_syms = {str(r[2]).upper() for r in log.open_plans()}
+        held = log.executed_positions()
+        drafts, skipped, dupes = [], [], []
+        for row in rows[:args.top]:
+            sym = str(row.get("symbol", "")).upper()
+            if not sym:
+                continue
+            if sym in open_syms or sym in held:
+                dupes.append(sym)
+                continue
+            d = draft_for(store, sym, equity, cash=args.cash, index=args.index)
+            (skipped if d.skip else drafts).append(d)
+        print(f"drafts (equity {equity:,.0f} = {args.equity:,.0f} x regime {scale}):")
+        for d in drafts:
+            print(f"  BUY {d.qty:>5} {d.symbol:<12} entry {d.entry:<10.2f} stop {d.stop:<10.2f} "
+                  f"target {d.target:<10.2f} {d.reason[:80]}")
+        for d in skipped:
+            print(f"  skip {d.symbol:<12} {d.skip}")
+        for s in dupes:
+            print(f"  skip {s:<12} already open/held (no duplicate drafts)")
+        if args.apply:
+            n = 0
+            for d in drafts:
+                pid = log.add_plan(OrderPlan(symbol=d.symbol, action="BUY", qty=d.qty,
+                                             entry=d.entry, stop=d.stop, target=d.target,
+                                             reason=d.reason, setup="scan-draft"))
+                n += 1
+                print(f"  stored plan #{pid}: {d.symbol} (execute by hand, then: "
+                      f"fill {d.symbol} BUY {d.qty} {d.entry} --plan {pid})")
+            log.expire_stale(__import__("datetime").date.today())
+            print(f"applied {n} draft plan(s) — they sit OPEN until a human fills or cancels")
+        else:
+            print("(printed only — nothing stored; add --apply to journal them as open plans)")
+        return 0
+    finally:
+        log.close()
+
+
+def cmd_brief(args) -> int:
+    """Morning brief: open plans vs closed bars, TTL-expired first, event rule
+    applied, stale rows named. Text for a human; zero actions."""
+    from indtrader.execution.planlog import PlanLog
+    from indtrader.research.paperloop import morning_brief
+
+    store = BarStore()
+    log = PlanLog()
+    try:
+        print(morning_brief(store, log, index=args.index))
+        return 0
+    finally:
+        log.close()
+
+
 def cmd_montecarlo(args) -> int:
     from indtrader.backtest.costs import DeliveryCosts
     from indtrader.backtest.engine import Backtester
@@ -1528,6 +1666,9 @@ def main(argv=None) -> int:
                    help="human-confirmed event, ratio = price multiplier (1:2 split -> 0.5)")
     s.add_argument("--gap-list", dest="gap_list", action="store_true",
                    help="batch: probe every symbol health would name as SPLIT-GAP")
+    s.add_argument("--resolve", action="store_true",
+                   help="offline: re-parse stored subjects with the CURRENT parser; "
+                        "still-unknown rows print the exact --set command (never guesses)")
     s.add_argument("--file", default=None, help="universe file for --gap-list")
     s.add_argument("--limit", type=int, default=0, help="cap symbols for --gap-list")
     s.set_defaults(fn=cmd_coractions)
@@ -1543,6 +1684,8 @@ def main(argv=None) -> int:
     s.add_argument("--host", default="127.0.0.1",
                    help="only relax beyond 127.0.0.1 inside a container you port-map yourself")
     s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--universe", default=None,
+                   help="universe file (default: data/universe.txt when it exists)")
     s.set_defaults(fn=cmd_dashboard)
     s = sub.add_parser("fetch-feeds"); s.add_argument("--days", type=int, default=7); s.set_defaults(fn=cmd_fetch_feeds)
     s = sub.add_parser("fetch-adj", help="store corporate-action factors (yfinance Adj Close / Close)")
@@ -1691,6 +1834,32 @@ def main(argv=None) -> int:
     s.add_argument("--warmup", type=int, default=400)
     s.add_argument("--test-days", dest="test_days", type=int, default=252)
     s.set_defaults(fn=cmd_gate)
+    s = sub.add_parser("gate-universe", help="batch gate with split-gap exclusion: "
+                       "gappy symbols are skipped and counted, never silently folded")
+    s.add_argument("symbols", nargs="*")
+    s.add_argument("--file", default=None, help="universe file (symbol per line)")
+    s.add_argument("--strategy", default="trend_sma200")
+    s.add_argument("--param", action="append", help="name=v1,v2 (repeatable), e.g. period=150,200,250")
+    s.add_argument("--metric", default="sharpe", choices=["sharpe", "cagr", "profit_factor"])
+    s.add_argument("--warmup", type=int, default=400)
+    s.add_argument("--test-days", dest="test_days", type=int, default=252)
+    s.add_argument("--include-gappy", dest="include_gappy", action="store_true",
+                   help="run the gate on split-gap symbols anyway (loudly discouraged)")
+    s.set_defaults(fn=cmd_gate_universe)
+    s = sub.add_parser("drafts", help="evening: last scan shortlist -> DRAFT plans "
+                       "(sizing + results rule applied; --apply journals them as open plans)")
+    s.add_argument("--top", type=int, default=5, help="how many scan picks to draft (default 5)")
+    s.add_argument("--equity", type=float, default=1_000_000.0,
+                   help="paper equity; scaled by the stored regime exposure_scale")
+    s.add_argument("--cash", type=float, default=None, help="cap drafts by cash on hand")
+    s.add_argument("--index", default="NIFTY")
+    s.add_argument("--apply", action="store_true",
+                   help="store drafts as OPEN plans (still human-executed — nothing here trades)")
+    s.set_defaults(fn=cmd_drafts)
+    s = sub.add_parser("brief", help="morning: open plans vs closed bars — TTL, gaps, "
+                       "stops, results rule; text only, zero actions")
+    s.add_argument("--index", default="NIFTY")
+    s.set_defaults(fn=cmd_brief)
     s = sub.add_parser("montecarlo", help="bootstrap distribution of outcomes from costed trades")
     s.add_argument("symbol")
     s.add_argument("--strategy", default="trend_sma200")

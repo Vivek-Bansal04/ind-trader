@@ -59,10 +59,16 @@ def test_snapshot_composes_without_inventing(seeded):
     snap = snapshot(store, log, ["TATA"])
     assert "NIFTY 25,024" in snap["banner"] and "STALE" not in snap["banner"]
     assert snap["book"][0][0] == "TATA" and snap["book"][0][2] == 205.5     # marked from store
-    assert snap["book"][0][4].startswith("<svg")                             # server-side sparkline
+    assert snap["book"][0][4]["svg"].startswith("<svg")                     # server-side sparkline
     assert snap["regime"]["label"] == "NEUTRAL"
-    assert snap["shortlist"][0][0] == "TATA" and snap["shortlist"][0][2] == 0.8
-    assert snap["shortlist"][0][4] == "momo" and snap["shortlist"][0][3].startswith("<svg")
+    # shortlist columns are symbol/score/quadrant/shape/note — the old "close"
+    # column printed "Improving" because scan payloads have no close key at all
+    # (laptop screenshot bug); score is rounded, never a 16-digit float.
+    assert snap["shortlist"][0][0] == "TATA" and snap["shortlist"][0][1] == 0.8
+    assert snap["shortlist"][0][2] == "Leading"
+    assert snap["shortlist"][0][4] == "momo"
+    assert snap["shortlist"][0][3]["svg"].startswith("<svg")    # spark cell is {svg:...}
+    assert "not stored" in " ".join(snap["shortlist"][0][5]["lines"])  # old payload = honest gaps
     assert snap["problems"] == []                                           # fill traces to executed plan
     assert snap["health"]["problem"] == 0
 
@@ -157,6 +163,172 @@ def test_honest_absences(seeded):
     assert snap["unresolved_ca"] == [] and snap["split_gaps"] == []
     assert snap["holidays"]["coverage"] is None
     assert "not fetched" in snap["holidays"]["master_missing"]
+
+
+# ---- the plain-words layer (redesign 2026-11-12): verdict + moves are PYTHON's job
+
+def test_verdict_and_moves_words(seeded):
+    store, log = seeded
+    snap = snapshot(store, log, ["TATA"])
+    assert snap["verdict"]["level"] == "green"          # bars fresh, NEUTRAL regime recorded
+    assert "NEUTRAL" in snap["verdict"]["text"] and "60%" in snap["verdict"]["text"]
+    titles = [m["title"] for m in snap["moves"]]
+    assert any("waiting at your broker" in t for t in titles)
+    card = next(m for m in snap["moves"] if "waiting at your broker" in m["title"])
+    assert "Plan #" in card["body"] and "--plan" in card["after"]
+    assert "TATA" in card["body"] and "delivery/CNC" in card["body"]
+    assert "never places orders" in snap["rule"]
+    # close the plan -> the card flips to the evening-flow card, never silence
+    log.con.execute("UPDATE plans SET status='executed'")
+    log.con.commit()
+    snap2 = snapshot(store, log, ["TATA"])
+    assert any("Nothing waiting" in m["title"] for m in snap2["moves"])
+
+
+def test_verdict_stops_on_index_staleness(seeded):
+    """Data truth outranks the market light: advice measured on old bars is not
+    advice, and the page must SAY stop before it says anything else."""
+    store, log = seeded
+
+    old = pd.bdate_range(end="2026-08-03", periods=30)
+    store.con.execute("DELETE FROM candles WHERE symbol='NIFTY'")
+    store.upsert_candles("NIFTY", "daily",
+                         pd.DataFrame({"open": 25000, "high": 25100, "low": 24900,
+                                       "close": 25000, "volume": 1e6}, index=old), "test")
+    snap = snapshot(store, log, ["TATA"])
+    assert snap["verdict"]["level"] == "red" and "STOP" in snap["verdict"]["text"]
+
+
+def test_moves_name_the_human_workload(seeded):
+    """UNRESOLVED actions must surface as a card WITH the exact --set command —
+    the layman page is also the to-do list, and 'unknown' without a next step
+    is just anxiety."""
+    store, log = seeded
+    from indtrader.research.coractions import upsert_corporate_actions
+
+    upsert_corporate_actions(store, "RELIANCE",
+                             [{"date": "07-Sep-2017", "kind": "Bonus Issue", "ratio": None}])
+    snap = snapshot(store, log, ["TATA"])
+    row = next(r for r in snap["unresolved_ca"] if r[0] == "RELIANCE")
+    assert row[1] == "2017-09-07"              # ISO-normal at storage (was '07-Sep-2017',
+                                               # then truncated on screen to '07-Sep-201')
+    card = next(m for m in snap["moves"] if "price history" in m["title"])
+    assert "indtrader coractions RELIANCE --set '2017-09-07|" in card["after"]
+    assert card["state"] == "amber"
+
+
+def test_score_is_displayed_rounded(seeded):
+    """2.851851851851852 on a human page is a bug, not precision (laptop screenshot)."""
+    store, log = seeded
+    log.record_signal("UNIVERSE", "scan", {"regime": "ON", "exposure_scale": 1.0,
+                                           "picks": [{"symbol": "TATA", "score": 2.851851851851852,
+                                                      "quadrant": "Leading"}]})
+    snap = snapshot(store, log, ["TATA"])
+    assert snap["shortlist"][0][1] == 2.85
+
+
+def test_shortlist_why_decomposes_the_score(seeded):
+    """The row 'why' explains the score with the scanner's OWN arithmetic —
+    quadrant points + momentum rank + bulk boost; never an invented number."""
+    store, log = seeded
+    log.record_signal("UNIVERSE", "scan", {
+        "regime": "ON", "exposure_scale": 1.0,
+        "picks": [{"symbol": "TATA", "score": 2.85, "quadrant": "Leading", "mom_6m": 0.18,
+                   "deliv_per": 62.0, "deliv_avg20": 55.0, "net_bulk": 2.5e7,
+                   "turnover_20d": 8.4e8, "base_quality": "tight", "note": "compressed base"}]})
+    snap = snapshot(store, log, ["TATA"])
+    why = snap["shortlist"][0][5]
+    joined = " | ".join(why["lines"])
+    assert "+1.5 points" in joined                       # Leading = 1.5 (scanner's table)
+    assert "+18.0%" in joined                            # mom_6m in human form
+    assert "buying ₹25,000,000" in joined and "+0.5 added" in joined
+    assert "= +1.5 quadrant + 0.85 momentum rank + 0.50 bulk buying → score 2.85" in joined
+    tail = why["tail"]
+    assert "delivery on the latest session 62% vs 20-day average 55%" in tail
+    assert "84.0 crore/day" in tail and "tight" in tail and "compressed base" in tail
+
+
+def test_shortlist_why_says_not_stored_never_zero(seeded):
+    """An OLD scan payload (pre-evidence-keys) must render 'not stored' — unknown
+    is not zero, even in a tooltip."""
+    store, log = seeded
+    snap = snapshot(store, log, ["TATA"])       # fixture payload has only symbol/score/quadrant/note
+    why = snap["shortlist"][0][5]
+    joined = " | ".join(why["lines"])
+    assert "not stored" in joined and "Bulk-deal feed: unknown" in joined
+    assert "turnover unknown" in why["tail"]
+    assert "delivery feed unknown" in why["tail"]
+
+
+def test_quadrant_points_pinned_to_scanner():
+    """dashboard.QUADRANT_POINTS re-states scanner.QUADRANT_SCORE for display —
+    if they ever drift, the page's arithmetic lies, so THIS test is the drift wire."""
+    from indtrader.research.scanner import QUADRANT_SCORE
+    from indtrader.web.dashboard import QUADRANT_POINTS
+
+    assert QUADRANT_POINTS == QUADRANT_SCORE
+
+
+def test_page_source_carries_no_python_escaped_quotes():
+    """PAGE is one Python string: a \\' inside it un-escapes to a bare ' before the
+    browser sees it, breaking the whole JS (a broken JS string = permanent
+    'loading…', observed 2026-11-12). Apostrophes belong in double-quoted JS
+    strings or HTML entities — the Python escape is the trap."""
+    import pathlib
+    import re
+
+    import indtrader.web.dashboard as wb
+
+    src = pathlib.Path(wb.__file__).read_text(encoding="utf-8")
+    page_src = src.split('PAGE = """')[1].split('"""')[0]
+    assert "\\'" not in page_src, 'use "double-quoted" JS strings or &apos; — never \\\' inside PAGE'
+    # crude balance tripwire (counts parens inside string TEXT too — fine while the
+    # copy stays balanced): a dropped-paren edit like the 2026-11-12 one trips here.
+    js = re.search(r"(?s)<script>(.*?)</script>", page_src).group(1)
+    assert js.count("(") == js.count(")")
+    assert js.count("{") == js.count("}")
+    assert js.count("[") == js.count("]")
+
+
+def test_serve_prefers_universe_file(tmp_path, monkeypatch):
+    """serve() must read data/universe.txt like review/riskreport do — the old
+    load_universe(None) showed 10 symbols on a machine holding 500."""
+    import indtrader.web.dashboard as wb
+    from indtrader.config import get_settings
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    (tmp_path / "universe.txt").write_text("AAA\nBBB\tEnergy\n# comment\nCCC\n", encoding="utf-8")
+    seen: dict = {}
+
+    def fake_make(store_factory, log_factory, uni):
+        seen["universe"] = list(uni)
+        return type("H", (), {})
+
+    class FakeSrv:
+        def __init__(self, *a):
+            pass
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr(wb, "make_handler", fake_make)
+    monkeypatch.setattr("http.server.ThreadingHTTPServer", FakeSrv)
+    assert wb.serve(port=0) == 0
+    assert seen["universe"] == ["AAA", "BBB", "CCC"]      # the 3-line file, comments dropped
+    other = tmp_path / "other.txt"
+    other.write_text("ZZZ\n", encoding="utf-8")
+    seen.clear()
+    assert wb.serve(port=0, universe_file=str(other)) == 0
+    assert seen["universe"] == ["ZZZ"]                    # --universe beats the default
+    seen.clear()
+    (tmp_path / "universe.txt").unlink()
+    assert wb.serve(port=0) == 0
+    assert len(seen["universe"]) == 10                    # labeled built-in default fallback
+    get_settings.cache_clear()
 
 
 def test_sparkline_svg_rules():

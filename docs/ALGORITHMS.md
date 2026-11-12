@@ -173,6 +173,15 @@ on **raw close prices adjusted by the factor layer in §2** unless stated.
   (sharpe default), mean OOS/IS ratio ≥ 0.5, and plateau — ≥50% of full-history
   grid neighbours within (1−0.35) of the modal choice's metric. No computable
   ratio → FAIL. Untradeable OOS (0 trades) → FAIL, loudly.
+- **`gate-universe` batch**: consults `symbol_split_gaps` BEFORE folding; a
+  symbol with an unexplained cliff is EXCLUDED and counted, never folded
+  (adjusted series are gated where factors exist). Statuses PASS/FAIL/EXCLUDED/
+  TOO_SHORT/NODATA; TOO_SHORT and NODATA are unknowns, not failures.
+- **Paper-loop drafts** (`research/paperloop.py`): qty via the SAME
+  `size_position` (1% risk, 3·ATR14 stop, 10% cap) and `size_gate` (results
+  rule) as live sizing; stop = close − 3·ATR14, target = close + 2×(stop
+  distance). Skips are named, never sized; a draft is a proposal, never an
+  order. `brief` flags last-close ≤ stop and stale-vs-index bars.
 - Metrics: CAGR, Sharpe (√252, ddof=0), max DD, profit factor, win rate.
 
 ## 10. Evidence monitors & alerts

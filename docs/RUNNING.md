@@ -25,12 +25,16 @@ pip install -e ".[dev,nse]"                # nse = NseIndiaApi primary provider
 
 copy .env.example .env                     # add AI keys later when you buy them
 
-pytest                                     # 45+ tests, no network needed
+pytest                                     # ~290 tests, no network needed
 python -m indtrader.cli fetch RELIANCE     # real daily candles from NSE/Yahoo
 python -m indtrader.cli backtest RELIANCE --strategy trend_sma200 --costs
 python -m indtrader.cli backtest RELIANCE --strategy donchian --costs
 python -m indtrader.cli rrg RELIANCE TCS INFY TITAN SUNPHARMA --bench NIFTY
 python -m indtrader.cli scan                       # universe shortlist (evidence table + journal)
+python -m indtrader.cli drafts --top 3             # size the shortlist into DRAFT plans (add --apply)
+python -m indtrader.cli brief                      # next morning: open plans vs closed bars
+python -m indtrader.cli coractions --resolve       # offline: re-parse stored split text today
+python -m indtrader.cli gate-universe RELIANCE TCS --strategy trend_sma200 --param period=150,200,250  # batch gate, split-gap aware
 python -m indtrader.cli regime
 python -m indtrader.cli ai RELIANCE        # works keyless (factpack) or with a model
 ```
@@ -68,6 +72,12 @@ Upserts are idempotent, so a missed night self-heals the next evening.
 4. For each pick: `cli compare <sym> --costs` to see all strategies side by side, then
    `cli plan SYM BUY --qty N --entry E --stop S --target T --reason "..." [--setup X]`
    — the rationale is mandatory and stop<entry<target is enforced at the door.
+   *Shortcut:* `cli drafts --top 3` sizes tonight's shortlist into DRAFT plans using
+   the live sizing rules (3·ATR stop, 2R target, results-rule half-size — skips
+   named, never invented); `cli drafts --top 3 --apply` journals them as OPEN plans
+   for you to edit/execute/cancel by hand. `cli brief` next morning prints the open
+   plans against closed bars — gap vs entry, TTL-expired first, stop breaches and
+   stale-data rows flagged, zero advice, zero actions.
 5. You place the CNC order manually at next morning's open (VRO or broker GTT/limit).
    The system never touches your broker.
 6. After executing: `cli fill SYM BUY/SELL qty px --costs ... --plan ID` records the

@@ -210,3 +210,27 @@ def test_symbol_split_gaps_shared_arithmetic(store):
     assert len(_symbol_split_gaps(store, "CLIFF", df, 0.35)) == 1   # dividend-only lie
     store.upsert_split_factors("CLIFF", {dates[3].date().isoformat(): 0.5})
     assert _symbol_split_gaps(store, "CLIFF", df, 0.35) == []       # recorded -> quiet
+
+
+# ---- --resolve: replay TODAY's parser over stored ratio-less subjects --------------------
+
+def test_resolve_reparses_stored_text_and_names_the_human_workload(store):
+    # rows as they would sit after an OLD-parser capture: inserted with ratio
+    # NULL directly (upsert would parse them with TODAY's parser immediately —
+    # which is exactly why replay pays off only after a parser upgrade).
+    for d, kind in [("2025-08-26", "Face Value Split From Rs 10 To Rs 2"),
+                    ("2025-09-01", "Share Split"),
+                    ("2025-09-02", "Dividend - Rs 5 per share")]:
+        store.con.execute("INSERT INTO corporate_actions VALUES (?,?,?,?)",
+                          ("OLDCO", d, kind, None))
+    store.con.commit()
+    rows = {r["date"]: r for r in ca.resolve_unresolved(store)}
+    assert rows["2025-08-26"]["ratio"] == 0.2          # read from the exchange's OWN words
+    assert rows["2025-09-01"]["ratio"] is None and "--set" in rows["2025-09-01"]["set"]
+    assert "2025-09-02" not in rows                    # dividend: complete, not unresolved
+    sf = store.split_factors("OLDCO")
+    assert str(sf.index[0].date()) == "2025-08-26" and float(sf.iloc[0]) == 0.2
+    # second run: the resolved row is gone from the NULL scan; the honest one stays
+    again = {r["date"]: r for r in ca.resolve_unresolved(store)}
+    assert "2025-08-26" not in again
+    assert again["2025-09-01"]["ratio"] is None

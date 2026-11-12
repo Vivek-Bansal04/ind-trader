@@ -130,10 +130,12 @@ Three separate jobs, none of them allowed to make up data:
 
 - **Evening (automatic, zero effort):** the collector runs, the page
   refreshes, a short briefing arrives on Telegram.
-- **Next morning (~10 minutes):** you look at the page. It says, for example:
-  *market NEUTRAL → keep 60% of money in stocks; here are 5 shortlisted
-  stocks with reasons; here is one plan: SBILIFE, buy near 3,120, stop 2,960,
-  target 3,450, because weekly breakout.*
+- **Next morning (~10 minutes):** you open the page. It leads with a plain
+  verdict — *market light NEUTRAL: new buying would use up to 60% of your
+  money* — then "Your moves today": one card per open decision (*SBILIFE, buy
+  near 3,120, stop 2,960, target 3,450, because weekly breakout — you decide;
+  if you buy, record it with this command*), plus cards for anything that
+  needs fixing first. All the technical tables sit in dropdowns underneath.
   You decide. Agree → place the order yourself in your broker app → tell the
   system "filled at 3,124". Disagree → say skip, move on. From then on the
   system watches the stop and the target for you.

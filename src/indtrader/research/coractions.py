@@ -76,7 +76,12 @@ def raw_payloads(store, symbol: str) -> list[tuple[str, str, object]]:
 def upsert_corporate_actions(store, symbol: str, events: list[dict]) -> int:
     """Store parsed corporate-action events. The ratio column holds the PARSED
     price multiplier when the subject text stated one — never the raw faceVal,
-    whose meaning (before/after the action) the payload does not say."""
+    whose meaning (before/after the action) the payload does not say.
+    Dates are normalised to ISO when parseable ("07-Sep-2017" -> 2017-09-07),
+    the same conversion build_split_factors already applies — stored raw they
+    came out mangled on the dashboard (laptop screenshot 2026-11-12). An
+    unparseable date is stored verbatim, never refused: these rows also carry
+    non-split events whose odd date formats must not block the write."""
     ensure(store)
     rows = []
     for e in events:
@@ -85,7 +90,12 @@ def upsert_corporate_actions(store, symbol: str, events: list[dict]) -> int:
         ratio = e.get("ratio")
         if ratio in (None, ""):
             ratio = _split_ratio(e["kind"]) if is_split_kind(e["kind"]) else None
-        rows.append((symbol.upper(), str(e["date"])[:40], str(e["kind"])[:300], ratio))
+        raw = str(e["date"]).strip()
+        try:
+            d = parse_iso_day(raw).isoformat()
+        except ValueError:
+            d = raw
+        rows.append((symbol.upper(), d[:40], str(e["kind"])[:300], ratio))
     store.con.executemany(
         "INSERT OR REPLACE INTO corporate_actions VALUES (?,?,?,?)", rows)
     store.con.commit()
@@ -138,6 +148,34 @@ def record_manual_event(store, symbol: str, spec: str) -> str:
         store.upsert_split_factors(symbol, {day: ratio})
         return f"recorded {symbol.upper()} {day} '{kind}' -> split factor {ratio} stored"
     return f"recorded {symbol.upper()} {day} '{kind}' (event only — not a split-like kind, no factor)"
+
+
+def resolve_unresolved(store, limit: int = 500) -> list[dict]:
+    """Re-read the STORED subject text of UNRESOLVED split-like events and apply
+    today's ratio parser to it. No network, no guessing: a ratio appears here
+    only if `_ratio_from_num_text` finds a numbered statement in the exchange's
+    own words — the same function parse_events used the first time. So this
+    pays off exactly when the parser has been upgraded since capture (round-7
+    from-to fix is the real case) and resolves nothing on unchanged code, which
+    is the honest result, not a bug. Rows still ratio-less come back with the
+    exact --set command for the human; dividends are skipped (complete, not
+    unresolved). Returns one dict per split-like row, resolved or not."""
+    rows = store.con.execute(
+        "SELECT symbol, d, kind FROM corporate_actions WHERE ratio IS NULL "
+        "ORDER BY symbol, d LIMIT ?", [limit]).fetchall()
+    out = []
+    for sym, d, kind in rows:
+        if not is_split_kind(kind):
+            continue
+        r = _ratio_from_num_text(kind)
+        if r is None:
+            out.append({"symbol": sym, "date": d, "kind": kind, "ratio": None,
+                        "set": f"coractions {sym} --set '{d}|{kind}|RATIO'"})
+            continue
+        upsert_corporate_actions(store, sym, [{"date": d, "kind": kind, "ratio": r}])
+        store.upsert_split_factors(sym, {parse_iso_day(d).isoformat(): r})
+        out.append({"symbol": sym, "date": d, "kind": kind, "ratio": r, "set": ""})
+    return out
 
 
 def parse_events(symbol: str, payload) -> list[dict]:

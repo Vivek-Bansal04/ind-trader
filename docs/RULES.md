@@ -1,10 +1,12 @@
 # ind-trader — the complete rules reference
 
 Every rule, threshold, refusal and retry the code actually enforces, read from
-the source line by line on 2026-11-12 (no assumptions, no memory — all 64 files
-under `src/indtrader/` plus `tools/` were read for this document). Each rule
-names its file, quotes its constant exactly, and gets an example with real
-numbers. Where a rule exists because of a live incident, the incident is named.
+the source line by line (no assumptions, no memory — all files under
+`src/indtrader/` plus `tools/` were read for this document; first pass
+2026-11-12, extended the same day for the paper-loop glue, the gap-aware batch
+gate and the offline ratio resolver — those rules are in §2.9, §7.8 and §9.1).
+Each rule names its file, quotes its constant exactly, and gets an example with
+real numbers. Where a rule exists because of a live incident, the incident is named.
 
 If this doc and the code ever disagree, the code wins — and the disagreement is
 a bug worth reporting.
@@ -273,6 +275,20 @@ off-by-one signature; ≥ 5% prints `ambiguous`; < 5% prints `yfinance feed
 leakage`). Lesson baked in: round-4 mislabeled "494 symbols" as leakage
 because the universe wasn't in the denominator.
 
+### 2.9 `coractions --resolve` — replay TODAY's parser over stored ratio-less text (`research/coractions.py::resolve_unresolved`)
+
+Offline, no network. Scans `corporate_actions` rows whose `ratio IS NULL`,
+skips non-split kinds (a dividend with no ratio is **complete, not
+unresolved**), and runs the CURRENT `_ratio_from_num_text` over the stored
+subject. A ratio appears only if the exchange's own words state a numbered
+statement — same function `parse_events` used the first time. So it pays off
+exactly when the parser has been UPGRADED since capture (round-7's from-to fix
+is the real case: `"...From Rs 10 To Rs 2"` now reads 0.2) and resolves nothing
+on unchanged code — the honest result, not a bug. A resolved row is re-stored as
+a split factor; a still-unknown row comes back with the exact
+`coractions SYM --set 'DATE|KIND|RATIO'` command for the human. It NEVER
+invents a ratio. Default scan cap `limit=500`.
+
 ---
 
 ## 3. Indicators (`ta.py`) — exact conventions
@@ -476,6 +492,22 @@ a pass)"*. The docstring states its own assumption limit: trade exchangeability
 isn't strictly true in regimes — *"measures parameterisation risk, not a
 crystal ball"*.
 
+### 7.8 `gate-universe` — the batch gate is gap-aware by default (`backtest/universegate.py`)
+
+A fold run over a symbol with an UNEXPLAINED split cliff measures a fabricated
+−50% move, so before ANY fold the batch consults the SAME
+`symbol_split_gaps` health/dashboard use (one shared implementation). Statuses
+are exhaustive — PASS / FAIL (gate ran) / **EXCLUDED** (pending factors — named
+with its cliffs, e.g. `2025-08-26 -50%`) / TOO_SHORT (`< warmup+2·test_days`
+bars — "can't say yet", NOT a fail) / NODATA (not fetched — unknown, not a
+fail). `--include-gappy` runs anyway with a stderr WARNING; exclusion stays
+the default, never the silent choice. The batch loads **adjusted** series
+where stored factors exist (an explained cliff must not poison folds either);
+the single-symbol `gate` keeps its raw behavior. Exit: **1** nothing ran
+(*"that is an unknown, not a pass"*), **2** any executed symbol failed, 0 all
+passed. Summary always prints `N excluded pending factors` — a batch can never
+mix poisoned rows into a clean-looking tally.
+
 ---
 
 ## 8. Sizing & risk (live side) (`portfolio/sizing.py`, `portfolio/limits.py`, `research/events.py`)
@@ -539,6 +571,35 @@ results 3 sessions out → 500 shares becomes 250 with the reason printed.
   BROKER / UNJOURNALLED / QTY MISMATCH — *"every divergence is reported to a
   human — this module never splits the difference and never trades to fix
   anything"*.
+
+### 9.1 The paper-loop glue (`research/paperloop.py`, CLI `drafts` + `brief`)
+
+The evening→morning connective tissue. **A draft is a PROPOSAL — nothing here
+can execute**; the only path into a position stays "human fills at the broker,
+`fill --plan` records it".
+
+- **`drafts`** reads the LAST stored `scan` signal (fails if there is none —
+  *"the draft chain starts from tonight's shortlist, not from nowhere"*), skips
+  any symbol already open or held (*"no duplicate drafts"*), and sizes each via
+  the SAME `size_position`/`size_gate` the live path uses — a draft and the real
+  risk check can never disagree. `STOP_ATR_MULT = 3.0` (identical to the
+  backtest engine), `TARGET_R = 2.0` target = 2R (a default to argue with, shown
+  so the human can edit it). Needs ≥ 211 bars; a name whose `3·ATR ≥ price` or
+  zero-crossing stop is SKIPPED and named, never sized to 1. Refusals name
+  themselves; **no qty is ever invented to fill a slot**. Without `--apply` it
+  only prints; with `--apply` drafts become OPEN plans tagged `setup=scan-draft`,
+  and the results half-size note rides INTO the journal reason, not just the
+  screen.
+- **`brief`** (morning) runs `expire_stale` first (TTL), then per OPEN plan
+  against CLOSED bars: last close vs entry (`gap UP`/`gap DOWN`/`flat` at
+  ±1%), the results rule (`size_gate`), and a hard flag if last close is already
+  ≤ stop (*"thesis check before ANY action"*). **Dead-man on stale bars**: if a
+  plan's symbol last bar ≠ index last bar → `DATA STALE … fix ETL first` and a
+  closing `DEAD-MAN` line — *"that row is UNKNOWN, not a signal"*. Advice-shaped
+  words (buy/sell) never appear; it prints facts a human decides on.
+
+Both reuse `events.size_gate`, so a plan and its morning brief apply one rule,
+not two.
 
 ---
 
@@ -698,6 +759,47 @@ Honest-absence displays, each with its "says one vs the other" rule:
 - `clean-day streak: not persisted — count [etl-loop] lines in the loop log` —
   the page NAMES the missing evidence instead of fabricating a counter.
 
+**The plain-words layer (redesign 2026-11-12).** The page leads with what a
+layman can act on; every technical table lives in a collapsed `<details>`
+dropdown. Rules the new layer enforces:
+- **Verdict** (one traffic-light sentence, computed server-side in Python,
+  never in client JS), decided in strict order: data truth → market light →
+  journal. RED "STOP" when NIFTY is empty, when its last bar is **> 5 business
+  days** old (the scan dead-man's threshold), or when **any** universe symbol
+  lacks a bar on the newest index session (`health.latest_missing`); AMBER when
+  the regime light has never been computed or reads OFF (OFF = "would hold NO
+  new positions… nothing here forces a sale"); GREEN names the regime label
+  and the exposure ceiling ("up to 50% of your money").
+- **Move cards**: each OPEN plan → one card (written reason, last close vs
+  planned entry, above-target/below-stop wording, the 2-day TTL reminder at
+  age ≥ 2 days, and the exact `fill … --plan ID` follow-up *to record an
+  already-made decision*). Cards state facts + next command; the words "buy"
+  /"sell" never appear as advice. No open plans → the card prints the evening
+  flow instead of silence. Journal gaps, split gaps + UNRESOLVED actions
+  (each with its exact `coractions --gap-list` / `--set` command), flagged
+  news and stale-bar counts each get their own card.
+- A standing `rule` line on every page render: *"this system never places
+  orders — delivery/CNC long-term only, no intraday, no F&O, no leverage"*.
+- Universe for health/heat: `--universe` file → else `data/universe.txt` when
+  it exists → else the labeled 10-name built-in default (the old silent
+  `load_universe(None)` showed 10 symbols on a 500-symbol machine — laptop
+  screenshot 2026-11-12); `serve()` prints which one it used.
+- **Shortlist "why" expander**: each pick's row opens the score's arithmetic
+  (`web/dashboard.py` `_shortlist_why`) — quadrant points (the table in
+  `research/scanner.py`, mirrored by a pinned test), the 6-month momentum part
+  solved as score-minus-fixed-parts (same arithmetic, not a guess), and the
+  +0.5 bulk-deal boost only when net buying exists. Values the payload never
+  carried render **"not stored"**, never a fake zero; a muted `Extra eyes`
+  line shows delivery vs 20-day average, turnover (₹ crore/day), base shape
+  and the scanner's own warning — explicitly labelled as changing nothing.
+  The scan journal additionally persists `deliv_avg20` so the delivery
+  comparison is real (`cmd_scan`, `cli.py`).
+- Display-truth fixes from the same screenshots: scan scores render rounded
+  (2 dp, never `2.8518…`), the bogus "close" column (scan payloads have no
+  close — it printed the quadrant word) is gone, and UNRESOLVED dates render
+  WHOLE — `coractions` now ISO-normalizes stored dates when parseable
+  (`07-Sep-2017 → 2017-09-07`; unparseable stays verbatim, never truncated).
+
 ### 11.5 Decay monitor (`research/decay.py`)
 Paper book vs the strategy's OWN costed-backtest bootstrap band (p5/p95, 2000
 sims, k = number of paper trades so far; rolling windows default 20, capped
@@ -787,6 +889,10 @@ Pause = a flag file (`DATA_DIR/paused.flag`) — survives restarts, visible with
 | backtest risk vs live | 2% vs 1%, both 3·ATR14 stops | engine / sizing |
 | `max_alloc` | 0.10 single / 0.20 portfolio | engine / portfolio |
 | fold sizes / gate floors | warmup 400, test 252, IS ≥ 0.3, ratio ≥ 0.5, plateau ≥ 50% within 35%, grid ≤ 12 | backtest/walkforward.py |
+| `gate-universe` default / batch load | gap-aware (exclude), adjusted series | backtest/universegate.py |
+| paper-loop stop / target | 3.0·ATR14 / 2R (target) | research/paperloop.py |
+| paper-loop min bars | 211 (needs a 200-DMA) | research/paperloop.py |
+| `--resolve` scan cap | 500 rows | research/coractions.py |
 | `TRADING_DAYS` | 252 (weights: 250) | engine / weights |
 | `MIN_TRADES` bootstrap | 20 | backtest/montecarlo.py |
 | tax | STCG 20% < 12m, LTCG 12.5%, exemption ₹1.25L, carry 8y | portfolio/tax.py |
@@ -802,6 +908,8 @@ Pause = a flag file (`DATA_DIR/paused.flag`) — survives restarts, visible with
 | news cap / ann windows | 20 queries / 30d & 7d & 3d | data/news.py |
 | XIRR bracket | [−0.9999, 10], widened once | portfolio/xirr.py |
 | dashboard bind / refresh | 127.0.0.1:8765 / 300 s | web/dashboard.py |
+| dashboard universe default | `data/universe.txt`, else labeled 10-name default | web/dashboard.py |
+| dashboard STOP rule | index > 5 business days old OR any symbol missing the newest session | web/dashboard.py |
 | HTTP timeouts | 15/20/30/1.5 s (feeds/broker/AI/ollama-probe) | http, fyers, providers, router |
 
 ---

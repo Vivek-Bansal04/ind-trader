@@ -170,7 +170,8 @@ Phases 1–3 of the plan are code-complete; the live-data half (Nifty-500 backfi
 10y walk-forward runs on the laptop, shareholding payload probe) runs on the <PERSON>
 per [`test-rounds/ROUND3-TODO.md`](test-rounds/ROUND3-TODO.md) — this network blocks NSE/Yahoo. Phase 4 (paper loop, 6–8 weeks)
 starts from that same checklist; its discipline tooling (plans, attribution, decay,
-dead-man) is all in. Phase 6 (investing leg) is feature-complete offline and live-verified where possible:
+dead-man, plus the paper-loop glue `drafts`/`brief`, the gap-aware `gate-universe`
+and the offline `coractions --resolve`) is all in. Phase 6 (investing leg) is feature-complete offline and live-verified where possible:
 MF NAV layer (AMFI is NOT blocked — 14,445 NAVs stored, contract-probe green, 2026-11-10),
 SIP ledger with fractional units, dividend/corporate-action ledger (cost-basis-correct
 FIFO treatment, dividend income in the tax sheet, redemption sells synthesized),
