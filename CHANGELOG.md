@@ -615,3 +615,14 @@ All changes made during this session, with commit IDs. Each entry records:
 **Status:** committed  
 **Commit ID:** this commit ("README: features at a glance + cure stale dashboard line")  
 **AGENTS.md Rule:** Rule 3 — stale docs cured in a docs-only change; Rule 4 — this entry
+
+---
+
+## Change 58: ROUND11 — design-review claims turned into laptop probes
+
+**File(s):** `test-rounds/ROUND11-TODO.md` (new), `CHANGELOG.md`  
+**What:** Six live probes for the factual claims in the operator's design review (docs/ind-trader Design Review.docx) that the office box cannot settle offline: Yahoo Close raw-vs-adjusted at a known ex-date (claim #2), NSE prev-close CA-adjustment (claim #79), yfinance factor-step placement vs our one-day confirmation window (#3), delivery/bulk publish times vs the 16:05 loop (#43), bhavcopy+sec_bhavdata_full reachability/columns (#78), Nifty200 Momentum 30 benchmark availability (#64). Commands use real table/column names verified against store.py/feeds.py; probes are read-only except fetch-adj (normal nightly behavior).  
+**Why:** The office box verified every review claim it could against code (results stayed in the session discussion — no code changed from the review, Rule 2 held); the provider-truth claims decide the fix designs, so they must be measured on the online laptop. Operator: "whatever you want to do in other laptop just paste so that other ai tool can understand and do what u want" — token/CSRF work explicitly deferred by the same message.  
+**Status:** committed  
+**Commit ID:** this commit ("ROUND11: live probes for the design review's provider claims")  
+**AGENTS.md Rule:** Rule 3 — checklist item documented as a test-rounds file; Rule 4 — this entry
