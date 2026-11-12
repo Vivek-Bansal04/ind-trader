@@ -48,6 +48,24 @@ source, never document from memory. This rule exists because a documented
 a calendar-anchored one, and because a rules doc written partly from memory
 missed rules that were in front of it. A stale doc is a bug, not a backlog item.
 
+## 4. Every code change must be recorded in `CHANGELOG.md`
+
+Before making any code change, add an entry to `CHANGELOG.md` with:
+
+| Field | What to write |
+|---|---|
+| File(s) changed | Full path(s) of every file modified |
+| What changed | Brief description of the change |
+| Why changed | Reason for the change |
+| Status | `not committed` / `committed` / `pushed` |
+| Commit ID | Git commit ID (only after committing) |
+| AGENTS.md rule | Which rule(s) this change touches (e.g., Rule 2) |
+
+Every code change — no matter how small — gets a `CHANGELOG.md` entry.
+This creates an auditable trail so anyone can see what changed, why, and
+which commit contains it. If you change code but don't add a `CHANGELOG.md`
+entry, the change is considered untracked.
+
 ## Where things live
 
 ```
