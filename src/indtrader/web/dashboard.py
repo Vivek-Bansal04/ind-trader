@@ -343,9 +343,18 @@ def _shortlist_why(pick: dict, score) -> dict:
         lines.append("6-month return: not stored — nothing counted for it")
     nb = pick.get("net_bulk")
     if nb is not None:
-        v = float(nb)
-        lines.append(f"Institutional bulk deals, net: {'buying' if v > 0 else 'selling' if v < 0 else 'flat'}"
-                     f" ₹{abs(v):,.0f} — {'+0.5 added' if v > 0 else 'no addition (only net buying adds)'}")
+        try:
+            v = float(nb)
+            if v != v:  # NaN check: nan != nan is True
+                lines.append("Bulk-deal feed: unknown for this name — nothing added, nothing subtracted")
+            elif v > 0:
+                lines.append(f"Institutional bulk deals, net: buying ₹{v:,.0f} — +0.5 added")
+            elif v < 0:
+                lines.append(f"Institutional bulk deals, net: selling ₹{abs(v):,.0f} — no addition (only net buying adds)")
+            else:
+                lines.append(f"Institutional bulk deals, net: flat ₹0 — no addition (only net buying adds)")
+        except (TypeError, ValueError):
+            lines.append("Bulk-deal feed: unknown for this name — nothing added, nothing subtracted")
     else:
         lines.append("Bulk-deal feed: unknown for this name — nothing added, nothing subtracted")
     if score is not None and q in QUADRANT_POINTS and m is not None:

@@ -132,7 +132,7 @@ def _expected_session(store: BarStore, now: datetime) -> date | None:
 def fetch_universe(symbols: list[str], store: BarStore | None = None, providers: list[DataSource] | None = None,
                    start: str = "2015-01-01", pause_s: float = 0.3,
                    skip_fresh: bool = False, fresh_bdays: int = 3,
-                   max_workers: int = 5) -> dict[str, int | None]:
+                   max_workers: int = 20) -> dict[str, int | None]:
     """Fetch (or top up) each symbol -> {sym: rows_stored, or None when skipped
     as fresh}. skip_fresh=True makes the nightly loop and a
     resumed backfill cheap: a symbol is skipped when its tail is current AND it
