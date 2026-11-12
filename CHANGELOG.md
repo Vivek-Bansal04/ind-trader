@@ -559,3 +559,48 @@ All changes made during this session, with commit IDs. Each entry records:
 **Rules followed:** Rule 3 (docs updated with code changes)
 
 **Note:** All changes were made with the intent of helping the project, but per AGENTS.md Rule 1, commits and pushes should only happen when explicitly asked. Rule 2 violations involved core logic changes (ETL, data providers, store schema, new modules) that should have been reported, not implemented.
+---
+
+## Session: office box, 2026-11-12 (second session — holdings feature + verdict thresholds)
+
+## Change 53: Holdings watchers core — `alerts/holdings.py` + GREEN vocabulary
+
+**File(s):** `src/indtrader/alerts/holdings.py` (new), `src/indtrader/data/news.py`, `src/indtrader/data/announce.py`, `src/indtrader/scheduler/run_daily.py`  
+**What:** New module: `record_holding` (validated human-confirmed BUY fill -> the SAME ledger `fill` writes), `holdings_view` (FIFO remaining-lot avg cost, marks, results countdown, per-name news), `green_title`/`good_news` (GREEN keyword list vetoed by the existing RED/AMBER triage), `send_holdings_alerts` (results countdown `RESULTS_ALERT_DAYS = 4` + good-news to Telegram; once-only dedup = sha1 signals row written only after a successful send). `news.py`: `good_recent()` storage-layer query. `announce.py`: "buyback" moved AMBER->GREEN + import-time assert AMBER∩GREEN empty. `run_daily.py`: evening loop now fetches the results calendar and runs the watchers after the news fetch (report printed either way).  
+**Why:** Operator asked (explicit feature request, this session): record bought stocks, always show them with news + results dates, Telegram 3-4 days before results and on good news. GREEN terms + dedup + honest paused/unconfigured behavior per repo philosophy.  
+**Status:** committed  
+**Commit ID:** this commit ("Holdings: record on dashboard, results + good-news Telegram watchers; verdict thresholds")  
+**AGENTS.md Rule:** Rule 2 — operator explicitly requested the feature AND the buyback->GREEN term move; Rule 3 — docs updated in same change (see Change 56)
+
+---
+
+## Change 54: Dashboard holdings panel + ONE journal write path (`POST /api/journal`)
+
+**File(s):** `src/indtrader/web/dashboard.py`  
+**What:** Snapshot carries `holdings_view(store, log)` + `results_alert_days`; new "My holdings" panel (qty, FIFO avg cost, last close, value, P&L, spark, results countdown, per-name headlines) with an add-form; new `do_POST /api/journal` -> `record_holding`, refusals answer 400 verbatim, any other path 404. Module docstring rewritten ("read-mostly": one journal write path, still NO order path). Form listener moved AFTER innerHTML (live browser check caught it dying at addEventListener before the move); POST round-trip browser-verified: accept shows "recorded — journal fill #N", refusal prints the validation sentence; JS tripwire still green.  
+**Why:** Explicit operator request (record holdings on the UI). Write path is journal-only by design: the same ledger row `indtrader fill` writes, human-confirmed execution unchanged.  
+**Status:** committed  
+**Commit ID:** this commit (same subject as Change 53)  
+**AGENTS.md Rule:** Rule 2 — explicitly requested; safety rails untouched (no order path exists in the handler); Rule 3 — README/LAYMAN/RUNNING/RULES §11.4 updated in same change
+
+---
+
+## Change 55: Verdict thresholds — few universe misses are AMBER, not page-wide RED
+
+**File(s):** `src/indtrader/web/dashboard.py`  
+**What:** `HOLDINGS_MISSING_RED = 0.10`. RED now only when (a) any HOLDING or open-plan name lacks the newest session bar — checked against its own bars, so a holding absent from universe.txt cannot hide; MF rows exempt — or (b) >10% of the universe misses the newest bar ("the fetch is failing"). Fewer misses -> AMBER verdict + a move card naming them. Three new tests pin all three rows (test_dashboard.py).  
+**Why:** The old rule red-flagged the page if ANY universe symbol missed a bar; one delisted name left in universe.txt made every evening STOP — the round-6 "EMPTY: 499 symbols" false-alarm failure reborn. Operator proposed thresholds in-session and approved "any held/plan + 10% universe" via explicit choice.  
+**Status:** committed  
+**Commit ID:** this commit (same subject as Change 53)  
+**AGENTS.md Rule:** Rule 2 — core threshold, CHANGED ONLY AFTER explicit operator instruction this session; Rule 3 — RULES §11.4 + §14 table updated in same change
+
+---
+
+## Change 56: CLI surfaces + console-safety + docs
+
+**File(s):** `src/indtrader/cli.py`, `README.md`, `docs/RULES.md`, `docs/ALGORITHMS.md`, `docs/RUNNING.md`, `docs/LAYMAN.md`, `test-rounds/ROUND10-TODO.md`, `tests/test_holdings.py` (new), `tests/test_dashboard.py`  
+**What:** `holdings [--notify]` command (panel as text / run watchers now); `events --save SYM=YYYY-MM-DD[,...]` manual results dates (parse-or-refuse); terminal prints use "Rs" not the rupee sign — Windows cp1252 console crashes on it (UnicodeEncodeError caught in live smoke; HTML panel keeps the sign). 16 new offline tests in test_holdings.py (validation refusals, FIFO-after-partial-sell math, both-ways news veto, once-only dedup, paused/unconfigured/failed-send paths, POST round-trip + 404). ROUND10 gained §5 laptop-validation checklist (calendar probe shape, --notify end-to-end, FIFO proof). Docs: RULES §11.1/11.4/§14 + new §11.7, ALGORITHMS §10, RUNNING, LAYMAN, README command table.  
+**Why:** Rule 3 (docs current in the same change) + the feature needs a terminal path and a manual-date fallback because the live NSE calendar method is laptop-validation.  
+**Status:** committed  
+**Commit ID:** this commit (same subject as Change 53)  
+**AGENTS.md Rule:** Rule 3 — followed

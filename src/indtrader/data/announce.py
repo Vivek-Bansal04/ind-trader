@@ -14,6 +14,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
+from indtrader.alerts.holdings import GREEN as _HOLDINGS_GREEN
 from indtrader.data.store import BarStore
 
 ANN_SCHEMA = """
@@ -31,12 +32,22 @@ RED = (
 )
 AMBER = (
     "resignation", "resigns", "credit rating", "downgrade", "delisting", "delist",
-    "buyback", "right shares", "preferential issue", "qdmit", "qmmit",
+    # "buyback" moved to GREEN (alerts/holdings.py) on 2026-11-12 at the operator's
+    # ask: for a holder it is shareholder-returning cash, not a warning. Keeping it
+    # in both lists would let the AMBER triage veto every "good news" buyback
+    # headline forever — the disjointness assert below makes double-listing fail
+    # loudly instead of silently starving the good-news watcher.
+    "right shares", "preferential issue", "qdmit", "qmmit",
     "recording of order", "upliftment", "pledge", "promoter sale", "open offer",
     "results", "board meeting",
 )
 DATE_KEYS = ("ANN_DATE", "ann_date", "date", "publishDate", "anndate", "timestamp")
 TITLE_KEYS = ("ANN_DESC", "ann_desc", "title", "desc", "description", "announcement", "subject")
+
+# a term may not live in both warn and good lists: warn wins in triage, so a
+# double-listed term would silently disable the holdings good-news watcher for it.
+assert not (set(AMBER) & set(_HOLDINGS_GREEN)), \
+    f"AMBER∩GREEN overlap: {sorted(set(AMBER) & set(_HOLDINGS_GREEN))}"
 
 
 @dataclass(frozen=True)

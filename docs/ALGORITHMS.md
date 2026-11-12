@@ -191,11 +191,22 @@ on **raw close prices adjusted by the factor layer in §2** unless stated.
 - News/announcements triage: RED = {pledge encroach(ement), forensic, fraud,
   nclt, insolvenc*, bankrupt, moratorium, suspended from trading, derecognition,
   blacklisted, criminal complaint, money laundering}; AMBER = {resignation(s),
-  credit rating, downgrade, delist(ing), buyback, right shares, preferential
+  credit rating, downgrade, delist(ing), right shares, preferential
   issue, qdmit, qmmit, recording of order, upliftment, pledge, promoter sale,
-  open offer, results, board meeting}. Word-boundary, case-insensitive,
+  open offer, results, board meeting} — "buyback" moved to the GREEN set
+  below (2026-11-12; import-time assert keeps AMBER∩GREEN empty).
+  Word-boundary, case-insensitive,
   precedence RED first; headlines cannot invent categories. Dead feed =
   "unreachable" status, never a clean-looking zero.
+- Holdings watchers (`alerts/holdings.py`, RULES §11.7): results countdown
+  fires when `0 ≤ (stored_results_date − today) ≤ RESULTS_ALERT_DAYS=4`;
+  good-news = GREEN(title) ∧ ¬triage_title(title) (both-ways headlines ship
+  as the warning only); one send per message text ever (signals-row sha1,
+  written only after a send returns ok). View math: qty from
+  `held_quantities(fills)`, avg cost = Σ(lot.qty·lot.price)/Σlot.qty over
+  the REMAINING FIFO lots (`portfolio.tax.open_lots`), marks via
+  `resolve_marks` — a missing mark yields None/"no mark" everywhere, never a
+  zero; MF rows display but never alert.
 - Shareholding tripwires (only on present numbers): Δpromoter ≤ −2.0pp,
   ΔFII ≤ −3.0pp, Δpledge > 0 (quarter-over-quarter, consecutive stored periods only).
 - Telegram briefing + pause flag file; review/riskreport compose weekly text.

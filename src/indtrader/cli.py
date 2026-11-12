@@ -1296,7 +1296,29 @@ def cmd_events(args) -> int:
 
     store = BarStore()
     try:
-        if not args.no_fetch:
+        if args.save:  # human-read dates (NSE calendar shape is laptop-validated)
+            rows, bad = [], []
+            for part in str(args.save).split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                sym, _, d = part.partition("=")
+                try:
+                    from datetime import date as _date
+                    _date.fromisoformat(d.strip())
+                except ValueError:
+                    bad.append(part)
+                    continue
+                if sym.strip():
+                    rows.append({"symbol": sym.strip().upper(), "d": d.strip(),
+                                 "kind": "results", "source": "manual"})
+            if bad:
+                print("refused (want SYM=YYYY-MM-DD): " + ", ".join(bad), file=sys.stderr)
+                if not rows:
+                    return 2
+            print(f"[events] stored {events.store_events(store, rows)} date(s)"
+                  + (f" from {rows[0]['symbol']} …" if len(rows) > 1 else ""))
+        if not args.no_fetch and not args.save:
             print(f"[events] fetch: {events.fetch_results_calendar(store)}")
         if args.symbol:
             qty, note = events.size_gate(store, args.symbol.upper(), args.qty)
@@ -1311,6 +1333,59 @@ def cmd_events(args) -> int:
         return 0
     finally:
         store.close()
+
+
+def cmd_holdings(args) -> int:
+    """My-holdings: the dashboard panel in your terminal (same arithmetic, same
+    module), or — with --notify — run the Telegram watchers right now."""
+    from indtrader.data.store import BarStore
+    from indtrader.execution.planlog import PlanLog
+
+    store, log = BarStore(), PlanLog()
+    # headlines are operator data — if one carries ₹ the Windows console still
+    # cannot print it (see the Rs note below); swap on the way to stdout only.
+    rsex = lambda s: str(s).replace("\u20b9", "Rs ")  # noqa: E731
+    try:
+        if args.notify:
+            from indtrader.alerts.holdings import send_holdings_alerts
+
+            rep = send_holdings_alerts(store, log)
+            print(f"held {rep['held']} name(s) — results_sent {len(rep['results_sent'])}, "
+                  f"news_sent {len(rep['news_sent'])}")
+            for t in rep["results_sent"] + rep["news_sent"]:
+                print("  sent:", rsex(t))
+            if rep["results_unknown"]:
+                print("  results date UNKNOWN (countdown cannot fire): "
+                      + ", ".join(rep["results_unknown"]) + " — indtrader events --save SYM=YYYY-MM-DD")
+            if not rep["sent"]:
+                print("nothing sent:", rep["reason"] or "no reason reported")
+            return 0
+        from indtrader.alerts.holdings import holdings_view
+
+        v = holdings_view(store, log)
+        if v["empty_ok"]:
+            print(v["hint"])
+            return 0
+        # "Rs", not "₹": this prints to a Windows cp1252 console that cannot
+        # encode the rupee sign (UnicodeEncodeError, smoke 2026-11-12). The HTML
+        # panel keeps ₹ — it ships UTF-8.
+        money = lambda x: "—" if x is None else f"Rs {x:,.0f}"  # noqa: E731
+        for r in v["rows"]:
+            pnl = "—" if r["pnl"] is None else (
+                f"{'+' if r['pnl'] >= 0 else '-'}Rs {abs(r['pnl']):,.0f}"
+                + (f" ({r['pnl_pct']:+.1%})" if r["pnl_pct"] is not None else ""))
+            print(f"{r['symbol']:<14} qty {r['qty']:>8,.0f}  avg {money(r['avg']):>10}  "
+                  f"last {money(r['close']):>10}  P&L {pnl:>22}  results: {r['results']}")
+            for d, title in r["news"][:2]:
+                print(f"    news {d}: {rsex(title)}")
+        if v["total_value"] is not None:
+            print(f"total Rs {v['total_value']:,.0f}"
+                  + (f"  P&L {'+' if v['total_pnl'] >= 0 else '-'}Rs {abs(v['total_pnl']):,.0f}"
+                     if v["total_pnl"] is not None else "  P&L not computable (a holding has no mark)"))
+        return 0
+    finally:
+        store.close()
+        log.close()
 
 
 def cmd_review(args) -> int:
@@ -1814,7 +1889,16 @@ def main(argv=None) -> int:
     s.add_argument("symbol", nargs="?")
     s.add_argument("--qty", type=int, default=0, help="proposed qty to run through the size gate")
     s.add_argument("--no-fetch", action="store_true")
+    s.add_argument("--save", metavar="SYM=YYYY-MM-DD[,SYM2=...]", default=None,
+                   help="store results dates you read yourself (the live NSE calendar "
+                        "shape is laptop-validation; manual dates work everywhere)")
     s.set_defaults(fn=cmd_events)
+    s = sub.add_parser("holdings", help="recorded holdings: FIFO basis, marks, results "
+                                        "countdown, news (--notify forces the Telegram watchers)")
+    s.add_argument("--notify", action="store_true",
+                   help="run the watchers NOW (results countdown + good news) instead of "
+                        "only printing the view; dedup means a sent alert never repeats")
+    s.set_defaults(fn=cmd_holdings)
     s = sub.add_parser("review", help="Sunday weekly review (market, book vs plans, journal, alerts, health)")
     s.add_argument("--no-telegram", action="store_true")
     s.set_defaults(fn=cmd_review)

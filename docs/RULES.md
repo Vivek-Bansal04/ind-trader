@@ -696,9 +696,13 @@ Word-boundary, case-insensitive, **RED before AMBER** (precedence):
   bankrupt, moratorium, suspended from trading, derecognition,
   wl (blacklisted), blacklisted, criminal complaint, money laundering.
 - **AMBER**: resignation, resigns, credit rating, downgrade, delisting,
-  delist, buyback, right shares, preferential issue, qdmit, qmmit, recording
+  delist, right shares, preferential issue, qdmit, qmmit, recording
   of order, upliftment, pledge, promoter sale, open offer, results, board
-  meeting.
+  meeting. ("buyback" MOVED to the GREEN list of §11.7 on 2026-11-12 at the
+  operator's ask — for a holder it is cash returned, not a warning; leaving
+  it in both lists would have let the AMBER triage veto every good-news
+  buyback headline. A module-load assert in `announce.py` makes AMBER∩GREEN
+  overlap fail loudly instead of silently.)
 Headlines cannot invent categories — `data/news.py` pipes Google News RSS
 titles through `triage_title`, the SAME function as exchange announcements,
 so "flagged" means one thing everywhere. Anything matching no rule is
@@ -734,13 +738,21 @@ sessions with a stored factor (ffill'd). The **split-gap check (§2.4) is a
 loud print, NOT a gate** — round-4 proved 100% adj coverage can coexist with
 an unexplained −50% cliff; a gap here means NO source explains the day.
 
-### 11.4 Dashboard (`web/dashboard.py`) — read-only by construction
-*"the request handler contains no write path, no subprocess, no order
-anything"*; two GET endpoints (`/`, `/api/status`); stdlib http.server only;
-binds **127.0.0.1** — `--host` beyond loopback prints an explicit no-auth
-WARNING (the sanctioned case is the Docker service with an operator-controlled
-port map); per-request connections (sqlite is thread-bound); page auto-refresh
-300s; snapshot errors come back IN the JSON envelope so the page keeps working.
+### 11.4 Dashboard (`web/dashboard.py`) — one journal write path, no order path
+*"no order anything"* still holds structurally: the handler exposes exactly
+three routes — two GETs (`/`, `/api/status`) and **one** write endpoint,
+`POST /api/journal`, which records a fill the human ALREADY executed at the
+broker through the same validation as `indtrader fill`
+(`alerts/holdings.record_holding` refuses malformed symbol/qty/price/date with
+its own words; refusals answer 400 verbatim, other paths 404 — no
+undiscovered write surface). The form states in its own copy: *"this form
+records a fill you ALREADY executed at your broker — it never places an
+order."* No request handler touches a broker or subprocess. Stdlib
+http.server only; binds **127.0.0.1** — `--host` beyond loopback prints an
+explicit no-auth WARNING (the sanctioned case is the Docker service with an
+operator-controlled port map); per-request connections (sqlite is
+thread-bound); page auto-refresh 300s; snapshot errors come back IN the JSON
+envelope so the page keeps working.
 Honest-absence displays, each with its "says one vs the other" rule:
 - no NIFTY bars → banner *"nothing below is trustworthy"*;
 - banner STALE when last NIFTY bar > 5 business days old; PAUSED flag shown;
@@ -765,11 +777,19 @@ dropdown. Rules the new layer enforces:
 - **Verdict** (one traffic-light sentence, computed server-side in Python,
   never in client JS), decided in strict order: data truth → market light →
   journal. RED "STOP" when NIFTY is empty, when its last bar is **> 5 business
-  days** old (the scan dead-man's threshold), or when **any** universe symbol
-  lacks a bar on the newest index session (`health.latest_missing`); AMBER when
-  the regime light has never been computed or reads OFF (OFF = "would hold NO
-  new positions… nothing here forces a sale"); GREEN names the regime label
-  and the exposure ceiling ("up to 50% of your money").
+  days** old (the scan dead-man's threshold), when **any holding or open-plan
+  name** (checked against its own bars, not the universe file — a holding
+  absent from universe.txt cannot hide; MF rows exempt) lacks a bar on the
+  newest index session, or when **> 10% of the universe**
+  (`HOLDINGS_MISSING_RED`) lacks one — "the fetch is failing". A FEW missing
+  names (halted/delisted leftovers) are AMBER, not page-wide STOP: each miss
+  is graded by whose money it blinds, and an always-red warning is the
+  round-6 "EMPTY: 499 symbols" false-alarm failure reborn (operator-approved
+  threshold change, 2026-11-12). A small miss list still gets its own move
+  card naming the symbols. AMBER also when the regime light has never been
+  computed or reads OFF (OFF = "would hold NO new positions… nothing here
+  forces a sale"); GREEN names the regime label and the exposure ceiling
+  ("up to 50% of your money").
 - **Move cards**: each OPEN plan → one card (written reason, last close vs
   planned entry, above-target/below-stop wording, the 2-day TTL reminder at
   age ≥ 2 days, and the exact `fill … --plan ID` follow-up *to record an
@@ -799,6 +819,19 @@ dropdown. Rules the new layer enforces:
   close — it printed the quadrant word) is gone, and UNRESOLVED dates render
   WHOLE — `coractions` now ISO-normalizes stored dates when parseable
   (`07-Sep-2017 → 2017-09-07`; unparseable stays verbatim, never truncated).
+- **My-holdings panel** (`alerts/holdings.py` `holdings_view`, built
+  server-side): one row per held name — qty, **FIFO average cost of the lots
+  that remain** (same `portfolio.tax.open_lots` walk as tax, so a partial
+  sell honestly re-prices the entry), last close + its date, value, P&L ₹ and
+  %, 60-day sparkline, the quarterly-results countdown and the name's latest
+  stored headlines (triage label shown when flagged). Honesty rules: no bars
+  → *"no bars / no mark"*, never a zero; no stored results date → *"date
+  unknown — run: indtrader events"*, never a fake *"far away"*; a `MF:` row
+  says *"n/a — a fund, no quarterly results"* (unknown and n/a are different
+  words); totals print *"not computable (a holding has no mark)"* rather than
+  summing past an unknown. The add-form beside it is the POST /api/journal
+  path described above — the panel and `indtrader holdings` render the SAME
+  dict from the SAME function.
 
 ### 11.5 Decay monitor (`research/decay.py`)
 Paper book vs the strategy's OWN costed-backtest bootstrap band (p5/p95, 2000
@@ -821,6 +854,31 @@ human-executed trade; `/plan` requires the same ≥ 10-char rationale and
 `stop < entry < target` as the CLI.
 Pause = a flag file (`DATA_DIR/paused.flag`) — survives restarts, visible with
 `dir`, no schema to trust; settable via CLI or `/pause`.
+
+### 11.7 Holdings watchers (`alerts/holdings.py`) — the evening loop's two phones home
+Run by `run_daily` after the news fetch, and on demand via
+`indtrader holdings --notify` (plain `holdings` prints the panel as text).
+- **Results countdown**: Telegram when a HELD name's stored results date is
+  within **`RESULTS_ALERT_DAYS = 4` calendar days** (operator-chosen "3-4
+  days prior"; the message also reminds that the plan rule blocks fresh
+  entries within 2 sessions). A held name with NO stored date is LISTED as
+  unknown in the report and print — the countdown never silently skips it.
+  Dates come from `indtrader events` (laptop-validated probe) or the manual
+  `indtrader events --save SYM=YYYY-MM-DD[,…]` path (parse-or-refuse).
+- **Good news** (`good_news`): a held name's headline matches the **GREEN**
+  vocabulary (word-boundary, ~40 narrow terms — "record high", "bags order",
+  "profit jumps", "buyback", "dividend"…; deliberately narrow so "record"
+  alone never fires) **AND** `triage_title` says it is NOT RED/AMBER —
+  a headline that reads both ways ("profit jumps as fraud probe opens")
+  ships as the warning only, never the good-news spin. AMBER∩GREEN is
+  asserted disjoint at import (§11.1 note).
+- **At most once per event**: a signals row (`source='tg-holdings-alert'`,
+  sha1 of the exact message) is written ONLY after `telegram.send` returns
+  ok — a failed send re-fires tomorrow, a sent one never repeats, and when
+  Telegram is unconfigured or the loop is PAUSED nothing is marked sent and
+  the reason prints (never rendered as a quiet evening). `MF:` holdings are
+  excluded from both watchers (no scheme-name lookup exists for news queries);
+  the panel still lists them.
 
 ---
 
@@ -883,6 +941,10 @@ Pause = a flag file (`DATA_DIR/paused.flag`) — survives restarts, visible with
 | FTD constants | 5%, day 4, 25 watch, 300 lookback, clamp(1.5σ,1%,2%) | research/regime.py |
 | bulk boost | +0.5 iff > 0, 7-day window | scanner + feeds |
 | results rule | no-entry ≤ 2 sessions, half ≤ 5 | research/events.py |
+| `RESULTS_ALERT_DAYS` | 4 calendar days (Telegram countdown) | alerts/holdings.py |
+| GREEN terms (good-news) | ~40 narrow phrases; AMBER∩GREEN asserted empty | alerts/holdings.py + data/announce.py |
+| holdings-alert dedup | sha1 in signals source `tg-holdings-alert`, written only after send-ok | alerts/holdings.py |
+| dashboard write paths | 1 (POST /api/journal → validated journal fill; no order path) | web/dashboard.py |
 | shareholding tripwires | promoter −2pp / FII −3pp / pledge + | research/shareholding.py |
 | slippage | 5 bps/side | backtest/costs.py |
 | STT / stamp / SLBM / txn / SEBI / GST | 0.1%×2 / 0.015% / 0.003% / 0.00297% / 10 Cr⁻¹ / 18% | backtest/costs.py |
@@ -899,6 +961,7 @@ Pause = a flag file (`DATA_DIR/paused.flag`) — survives restarts, visible with
 | `risk_per_trade / corr threshold / max penalty` | 1% / 0.7 / 0.5 | portfolio/sizing.py |
 | `max_daily_loss / max_positions / max_per_symbol / no_stale_data` | ₹20,000 / 15 / 1 / 3 days | portfolio/limits.py |
 | scan dead-man | 5 business days | cli.py |
+| verdict missing-bar rule | any holding/open-plan name missing → red; universe > 10% (`HOLDINGS_MISSING_RED`) → red; fewer → amber + card | web/dashboard.py |
 | health gate | missing > 2, stale > 3 | cli.py |
 | plan TTL / rationale min length | 2 days / 10 chars | planlog / cli |
 | weights cap / min joint obs | 0.25 / 60 | portfolio/weights.py |

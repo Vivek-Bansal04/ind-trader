@@ -129,7 +129,15 @@ Three separate jobs, none of them allowed to make up data:
 ## A normal day with it
 
 - **Evening (automatic, zero effort):** the collector runs, the page
-  refreshes, a short briefing arrives on Telegram.
+  refreshes, a short briefing arrives on Telegram. If a stock YOU own has its
+  quarterly results within 4 days, or genuinely good news (orders won, record
+  profit, buyback…) shows up without a warning mixed in, that also arrives on
+  Telegram — once, never repeated.
+- **Your holdings, always on screen:** record what you already own once (the
+  "My holdings" form on the page, or `indtrader fill`) and the page keeps the
+  list: what you paid, what it's worth, the results date counting down and the
+  latest headlines per name. Recording means "I actually bought this" — the
+  form writes your journal, it never places an order.
 - **Next morning (~10 minutes):** you open the page. It leads with a plain
   verdict — *market light NEUTRAL: new buying would use up to 60% of your
   money* — then "Your moves today": one card per open decision (*SBILIFE, buy

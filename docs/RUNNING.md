@@ -64,7 +64,11 @@ Upserts are idempotent, so a missed night self-heals the next evening.
 
 1. 16:05 — ETL updates candles automatically, then evidence feeds (delivery % + bulk
    deals) best-effort (Docker loop or Windows Task Scheduler). `cli backup` in the same
-   schedule (online sqlite copies + integrity check, keeps 14).
+   schedule (online sqlite copies + integrity check, keeps 14). Then, best-effort and
+   printed either way: news fetch for held names, the results calendar, and the
+   holdings watchers — a Telegram countdown for held names with results ≤4 days out
+   and clean-good headlines (each at most once; paused/unconfigured is stated in the
+   loop log, never faked as quiet).
 2. Evening — `cli regime` → one of ON/NEUTRAL/OFF sets your max exposure.
 3. `cli scan` → ranked shortlist with evidence (trend/RRG/momentum/delivery/deals per
    symbol). Refuses (exit 1) if the index's last bar is >5 business days old — dead-man;
@@ -84,6 +88,10 @@ Upserts are idempotent, so a missed night self-heals the next evening.
    actual fill AND closes the plan (the ledger note keeps the `plan#N` trace);
    `cli reconcile` compares journal vs Fyers holdings (read-only) and
    flags anything unexplained. `cli tax` prints FY-wise realized gains + CGT estimate.
+   Stocks you bought before all this: record them once via the dashboard's
+   My-holdings form (one validated journal write, no order path) or `cli fill`;
+   `cli holdings` (or the panel) then always shows qty, FIFO average cost of the
+   remaining lots, marks, P&L, results countdown and headlines per name.
 
 Monthly (plan §D discipline):
 

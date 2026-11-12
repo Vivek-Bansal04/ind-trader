@@ -1,7 +1,8 @@
-# ROUND 10 — the office box built three new tools overnight (paper-loop glue,
-# gap-aware batch gate, offline ratio resolver). This round runs them against
-# the REAL store for the first time. ROUND8 and ROUND9 are still open — do
-# those first if you haven't; nothing here replaces them.
+# ROUND 10 — the office box built the paper-loop glue, gap-aware batch gate,
+# offline ratio resolver — and the My-holdings panel + Telegram watchers — for
+# the first time. This round runs them against the REAL store. ROUND8 and
+# ROUND9 are still open — do those first if you haven't; nothing here replaces
+# them.
 
 Pull first: `git pull --ff-only` — these commands must exist in `--help`.
 
@@ -73,8 +74,41 @@ PASTE 4 (screenshot to `screenshots/`, plus text answers):
 - did HDFCBANK's stale factor rows change? paste `sqlite3 data/bars.sqlite
   "SELECT * FROM split_factors WHERE symbol='HDFCBANK'"` — the ROUND8 factor-step
   4.0 evidence is still needed here.
+- NEW in this build: record one real holding via the My-holdings form (a small
+  position you actually own) — does the row show your qty, your average, and a
+  P&L that matches the broker app? A refusal (bad qty etc.) must print the
+  validation's own sentence under the form. Screenshot the panel.
 
-## 5. Backlog reminder (unchanged from ROUND8/9)
+## 5. My-holdings + Telegram watchers — first live run (same build night)
+
+```
+indtrader events --save TCS=YYYY-MM-DD   (any real results date you can verify; 2 names = better)
+indtrader events TCS --qty 100
+indtrader holdings
+indtrader holdings --notify
+```
+
+```
+indtrader events          (the plain fetch — does the live NSE calendar probe find a real method?)
+```
+
+PASTE 5 (five boxes):
+```
+a) events --save output + what date you verified it against (BSE/NSE link)
+b) events TCS --qty 100 (the size-gate note must name the date distance)
+c) holdings output (qty/avg/P&L must match YOUR broker for at least one real
+   stock you own — this is the FIFO-math proof; wrong avg = paste the fills:
+   sqlite3 data/plans.sqlite "SELECT * FROM ledger WHERE symbol='SYMBOL'")
+d) holdings --notify output. No Telegram configured? The line must say so —
+   "nothing sent: telegram not configured (...)" is a PASS, silence is not.
+   Configured: you should get exactly one message per due item, and running
+   --notify AGAIN must send nothing the second time (dedup).
+e) the plain `indtrader events` fetch line — {"ok": true, "method": ...} or
+   the honest error; if ok, does the calendar hold real dates? (compare one
+   name against the NSE site; a wrong shape is exactly what this round is for)
+```
+
+## 6. Backlog reminder (unchanged from ROUND8/9)
 
 - ROUND8 §1: `coractions --gap-list --file data/universe.txt --limit 60` batch
 - ROUND8 §2: dashboard screenshot + HDFCBANK factor rows

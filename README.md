@@ -50,6 +50,8 @@ Built from scratch (Nov 2026) after a source-level audit of 111 GitHub repositor
 | `fetch-adj` | Store corporate-action factors (yfinance Adj Close/Close); `backtest --adjusted` uses them, warns on RAW fallback |
 | `ann` | Announcement triage for HOLDINGS only: RED (fraud/pledge-encroachment/NCLT…) vs AMBER keywords; empty book = empty alert, never a firehose |
 | `events [SYM --qty N]` | Results calendar + the plan's event rule: no fresh entry ≤2 sessions before earnings, half size ≤5; unknown date = guard off, stated |
+| `events --save SYM=YYYY-MM-DD[,…]` | Store results dates you read yourself (parse-or-refuse; the live NSE calendar probe is laptop-validation, manual dates work everywhere) |
+| `holdings [--notify]` | The My-holdings view in the terminal — qty, FIFO average cost of remaining lots, marks, P&L, results countdown, latest headlines (same `holdings_view` the dashboard panel renders). `--notify` runs the Telegram watchers now (results ≤4 days out + GREEN-not-AMBER news; each message sends at most once, dedup survives restarts) |
 | `review` | Sunday review: benchmark week + regime, book vs executed plans (fills without a plan are flagged), journal hygiene, holding announcements, data health |
 | `plan SYM BUY --qty --entry --stop --target --reason "..."` | Written plan (Phase-4 door): rationale mandatory, stop<entry<target enforced at creation |
 | `plans [--all]` / `plan-mark ID STATUS` | Plan journal: open-first list, manual executed/cancelled/stale close-outs |

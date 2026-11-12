@@ -122,6 +122,22 @@ def triaged_recent(store: BarStore, symbols: list[str], days: int = 7) -> list[M
     return out
 
 
+def good_recent(store: BarStore, symbols: list[str], days: int = 3) -> list[tuple]:
+    """Raw (symbol, d, title) rows for these symbols within `days` — NO judgement
+    applied here (that's the caller's GREEN/triage job, same split as this
+    module's docstring states). Empty symbols or a missing table => [] honestly:
+    no rows stored is genuinely nothing stored, not a feed outage (fetch_news
+    reports outages at fetch time)."""
+    store.con.executescript(NEWS_SCHEMA)
+    if not symbols:
+        return []
+    since = (date.today() - timedelta(days=int(days))).isoformat()
+    q = ("SELECT symbol, d, title FROM news_seen WHERE symbol IN ({}) AND d >= ? "
+         "ORDER BY d DESC LIMIT 500").format(",".join("?" * len(symbols)))
+    return [(str(r[0]).upper(), str(r[1]), str(r[2]))
+            for r in store.con.execute(q, [s.upper() for s in symbols] + [since]).fetchall()]
+
+
 def format_alert(matches: list[Match]) -> str:
     if not matches:
         return "News: nothing keyword-flagged on holdings (7d) — quiet or feed down; check fetch status"

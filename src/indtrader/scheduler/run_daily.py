@@ -57,6 +57,40 @@ def run_once(universe_file: str | None = None) -> dict[str, int | None]:
               + ("" if res["ok"] else " — ALL FEEDS DOWN, news view is UNKNOWN not quiet"))
     except Exception as e:
         print(f"[etl-loop] news failed (non-fatal): {e}")
+    # results calendar for the holdings countdown (runtime method probe — an
+    # unavailable source is REPORTED, and the countdown then names its unknowns)
+    try:
+        from indtrader.data.store import BarStore
+        from indtrader.research import events
+
+        store = BarStore()
+        try:
+            print(f"[etl-loop] events: {events.fetch_results_calendar(store)}")
+        finally:
+            store.close()
+    except Exception as e:
+        print(f"[etl-loop] events fetch failed (non-fatal): {e}")
+    # holdings watchers: results countdown + good news on held names, at most
+    # once per event (dedup rides the signals table). The report prints either
+    # way — unconfigured or paused is STATED, never rendered as a quiet evening.
+    try:
+        from indtrader.alerts.holdings import send_holdings_alerts
+        from indtrader.data.store import BarStore
+        from indtrader.execution.planlog import PlanLog
+
+        store, log = BarStore(), PlanLog()
+        try:
+            rep = send_holdings_alerts(store, log)
+            if rep["sent"]:
+                print(f"[etl-loop] holdings alerts sent: results={len(rep['results_sent'])} "
+                      f"news={len(rep['news_sent'])}")
+            else:
+                print(f"[etl-loop] holdings alerts: {rep['reason'] or 'nothing sent'}")
+        finally:
+            store.close()
+            log.close()
+    except Exception as e:
+        print(f"[etl-loop] holdings alerts failed (non-fatal): {e}")
     # evening briefing to Telegram when configured (print-only otherwise)
     try:
         from indtrader.alerts.briefing import maybe_notify

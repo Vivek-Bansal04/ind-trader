@@ -8,22 +8,29 @@ tables, sparklines) lives in collapsed <details> dropdowns below: same data,
 same honesty, one click away. The plain words are built SERVER-side in Python
 (fixture-testable), never in client JS.
 
-Read-only is structural, not a slogan: holdings + open plans + regime + the
+Read-mostly is structural, not a slogan: holdings + open plans + regime + the
 scan shortlist + the operator ledgers, all rendered from the same sqlite stores
-the CLI reads. No new dependencies (Smart App Control on the office box blocks
-new native packages anyway), no authentication (bind 127.0.0.1 only — this is
-a personal tool on the operator's laptop; the one sanctioned exception is an
-explicit --host inside a container you port-map yourself), and the request
-handler contains no write path, no subprocess, no order anything. The
-sparklines/heatmap are server-generated SVG strings from fixture-testable
-code — no client JS beyond table building.
+the CLI reads. The ONE write path is a journal entry — recording a fill a human
+already executed at the broker (POST /api/journal below); there is no order
+path, and no request handler touches a broker or subprocess. No new
+dependencies (Smart App Control on the office box blocks new native packages
+anyway), no authentication (bind 127.0.0.1 only — this is a personal tool on
+the operator's laptop; the one sanctioned exception is an explicit --host
+inside a container you port-map yourself). The sparklines/heatmap are
+server-generated SVG strings from fixture-testable code — no client JS beyond
+table building and the one journal form.
 
 Every card states the no-order fact in words, not by omission: the system
 never places orders; a human clicks at the broker, then records it here.
 
 Endpoints:
-  GET /            -> the page (HTML, auto-refresh 5 min)
-  GET /api/status  -> JSON snapshot the page renders from
+  GET  /            -> the page (HTML, auto-refresh 5 min)
+  GET  /api/status  -> JSON snapshot the page renders from
+  POST /api/journal -> record ONE human-confirmed fill (the My-holdings form).
+       This is the single write path and it is a JOURNAL ENTRY, never an order:
+       it writes the same ledger row `indtrader fill` writes, after the same
+       validation (alerts/holdings.record_holding refuses anything malformed).
+       No endpoint here can place, modify or cancel anything at a broker.
 """
 from __future__ import annotations
 
@@ -56,9 +63,12 @@ details.inrow summary{font-weight:400;font-size:13px;color:#3b5bdb}
 details.inrow ul{margin:4px 0 4px 18px;padding:0}
 details.inrow li{margin:2px 0}
 .legend{font-size:13px}
+.hform{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.hform input{padding:5px 8px;border:1px solid #d7dde5;border-radius:6px;font-size:14px}
+.hform button{padding:6px 12px;border:1px solid #3b5bdb;background:#3b5bdb;color:#fff;border-radius:6px;cursor:pointer;font-size:14px}
 </style></head><body>
 <h1>ind-trader — what to do today</h1>
-<div class="muted">read-only · this page never trades — you decide, you click at your broker, you record it here</div>
+<div class="muted">this page never places orders — you decide, you click at your broker, you record it here</div>
 <div id="app">loading…</div>
 <script>
 async function draw(){
@@ -75,6 +85,34 @@ async function draw(){
   h+='<h2>Your moves today</h2>';
   h+=(d.moves||[]).map(m=>box(m.state,m.title,esc(m.body)+(m.after?`<span class="after">next: ${esc(m.after)}</span>`:''))).join('')||'<div class="muted">nothing to show — run scan/fill first</div>';
   h+=`<div class="muted">${esc(d.rule||'')}</div>`;
+  {
+    const hg=d.holdings||{rows:[]};
+    h+='<h2>My holdings — what I already own</h2>';
+    h+=(hg.rows&&hg.rows.length)?(()=>{
+      const money=v=>v==null?'<span class="muted">no mark</span>':'₹'+Number(v).toLocaleString('en-IN');
+      const rows=(hg.rows||[]).map(r=>{
+        const sp=r.spark&&r.spark.svg?r.spark.svg:'<span class="muted">no bars</span>';
+        const pc=r.pnl==null?'<span class="muted">—</span>':'<span class="'+(r.pnl>=0?'ok':'bad')+'">'+(r.pnl>=0?'+':'−')+'₹'+Math.abs(r.pnl).toLocaleString('en-IN')+(r.pnl_pct==null?'':' ('+(r.pnl_pct>=0?'+':'−')+(Math.abs(r.pnl_pct)*100).toFixed(1)+'%)')+'</span>';
+        const nw=(r.news||[]).slice(0,2).map(n=>esc(n[1])).join(' · ')||'<span class="muted">none stored</span>';
+        return '<tr><td><b>'+esc(r.symbol)+'</b></td><td>'+Number(r.qty).toLocaleString('en-IN')+'</td>'+
+          '<td>'+(r.avg==null?'<span class="muted">—</span>':'₹'+Number(r.avg).toLocaleString('en-IN'))+'</td>'+
+          '<td>'+(r.close==null?'<span class="muted">no bars</span>':'₹'+Number(r.close).toLocaleString('en-IN')+' <span class="muted">'+esc(r.close_date||'')+'</span>')+'</td>'+
+          '<td>'+money(r.value)+'</td><td>'+pc+'</td><td>'+sp+'</td>'+
+          '<td>'+esc(r.results)+'</td><td>'+nw+'</td></tr>';}).join('');
+      const tot=(hg.total_value==null&&hg.total_pnl==null)?'':
+        '<div class="banner">total '+money(hg.total_value)+' · P&amp;L '+
+        (hg.total_pnl==null?'<span class="muted">not computable (a holding has no mark)</span>':
+        '<span class="'+(hg.total_pnl>=0?'ok':'bad')+'">'+(hg.total_pnl>=0?'+':'−')+'₹'+Math.abs(hg.total_pnl).toLocaleString('en-IN')+'</span>')+'</div>';
+      return '<table><tr><th>symbol</th><th>qty</th><th>avg cost</th><th>last close</th><th>value</th>'+
+        '<th>P&amp;L</th><th>60d</th><th>quarter results</th><th>latest news</th></tr>'+rows+'</table>'+tot+
+        '<div class="muted">avg cost = the FIFO basis of what is LEFT (same walk as tax). Results within '+
+        String(d.results_alert_days)+' days and good news on these names alert on Telegram — the evening loop sends them.</div>';})():
+      '<div class="muted">'+esc(hg.hint||'no holdings recorded yet')+'</div>';
+    h+='<form id="hform" class="hform"><input name="symbol" placeholder="SYMBOL" maxlength="20" required>'+
+      '<input name="qty" placeholder="qty" size="6" required><input name="price" placeholder="buy price ₹" size="9" required>'+
+      '<input name="dt" placeholder="YYYY-MM-DD (blank = today)" size="15"><button type="submit">record fill</button></form>'+
+      '<div id="hmsg" class="muted">this form records a fill you ALREADY executed at your broker — it never places an order.</div>';
+  }
   const det=(title,legend,inner)=>`<details><summary>${esc(title)} <span class="muted legend">${esc(legend||'')}</span></summary>${inner}</details>`;
   if(d.etl && d.etl.length){
     h+=det('Data pipeline — the last 10 market days','what the database can prove',
@@ -128,6 +166,20 @@ async function draw(){
           `<td style="white-space:nowrap"><details class="inrow"><summary>why</summary>${exp}</details></td></tr>`;
       }).join('')}</table>`:'<div class="muted">no scan signal stored yet — run the scan this evening</div>');
   document.getElementById('app').innerHTML=h||'nothing yet — run scan/fill';
+  // attach AFTER innerHTML: the form does not exist in the DOM until the line above
+  const fm=document.getElementById('hform');
+  if(fm)fm.addEventListener('submit',async e=>{
+    e.preventDefault();
+    const f=Object.fromEntries(new FormData(fm));
+    const msg=document.getElementById('hmsg');
+    try{
+      const r=await fetch('/api/journal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(f)});
+      const j=await r.json();
+      msg.innerHTML=j.ok?'<span class="ok">recorded — journal fill #'+esc(j.id)+'</span>':
+        '<span class="bad">refused: '+esc(j.error||'unknown refusal')+'</span>';
+      if(j.ok)draw();
+    }catch(err){msg.innerHTML='<span class="bad">refused: '+esc(String(err))+'</span>';}
+  });
 }
 draw().catch(e=>document.getElementById('app').textContent='error: '+e);
 </script></body></html>"""
@@ -168,7 +220,8 @@ def snapshot(store, log, universe: list[str]) -> dict:
                  "problems": [], "health": None, "regime": None,
                  "split_gaps": [], "unresolved_ca": [], "holidays": None,
                  "news": [], "news_note": "", "shareholding": [], "heat": None,
-                 "etl": [], "moves": [], "verdict": None, "rule": RULE_TEXT}
+                 "etl": [], "moves": [], "verdict": None, "rule": RULE_TEXT,
+                 "holdings": None, "results_alert_days": None}
     idx = store.load("NIFTY")
     if idx.empty:
         out["banner"] = "no NIFTY bars — ETL gap; nothing below is trustworthy"
@@ -300,6 +353,14 @@ def snapshot(store, log, universe: list[str]) -> dict:
     # flagged news: stored rows through the SAME triage as announcements
     out["news"], out["news_note"] = _flagged_news(store)
 
+    # the My-holdings panel: FIFO basis + marks + results countdown + per-name
+    # news, all built by alerts/holdings (the SAME module the evening loop uses
+    # for Telegram watchers — one arithmetic, two surfaces).
+    from indtrader.alerts.holdings import RESULTS_ALERT_DAYS, holdings_view
+
+    out["holdings"] = holdings_view(store, log)
+    out["results_alert_days"] = RESULTS_ALERT_DAYS
+
     # the plain-words layer — computed here, in Python, so tests can pin the words
     out["verdict"] = _verdict(store, idx, out, fills, held)
     out["moves"] = _moves(store, log, idx, out, held)
@@ -309,6 +370,15 @@ def snapshot(store, log, universe: list[str]) -> dict:
 RULE_TEXT = ("Standing rule: this system never places orders — delivery/CNC long-term only, "
              "no intraday, no F&O, no leverage. Every card above is information; the click "
              "at your broker is always a human decision.")
+
+# Verdict thresholds (operator-approved 2026-11-12; RULES §11.4). The old rule
+# went page-wide RED if ANY universe symbol lacked the newest session's bar —
+# one delisted name left in universe.txt made every evening red, which is the
+# round-6 "EMPTY: 499 symbols" failure in a new costume: an always-red warning
+# is an ignored warning. Missing bars are now graded by whose money they blind:
+# a holding/open-plan name is always loud (a small set — any miss matters);
+# the crowd only matters when the crowd is failing.
+HOLDINGS_MISSING_RED = 0.10  # of the UNIVERSE missing the newest bar → page-wide red
 
 # points research/scanner.py's scan() adds for each RRG quadrant — copied HERE (the
 # page explains the stored score with the same arithmetic the scanner used; if the
@@ -423,12 +493,35 @@ def _verdict(store, idx, out: dict, fills, held) -> dict:
                 "text": f"STOP — NIFTY's newest bar is {idx.index[-1].date()}, {age} business days "
                         f"ago. Numbers on stale prices can fake a trend: fix the data pipeline "
                         f"(see 'Data pipeline' below) before acting on anything."}
-    dead = (out["health"] or {}).get("latest_missing") or []
-    if dead:
-        shown = ", ".join(dead[:5]) + (f" (+{len(dead) - 5} more)" if len(dead) > 5 else "")
+    latest = pd.Timestamp(idx.index.max()).date()   # newest index session — the day everyone must have
+    dead = set((out["health"] or {}).get("latest_missing") or [])
+    # 1) the names YOUR money sits in — checked against the bars themselves, not
+    # the universe heatmap, so a holding absent from universe.txt cannot hide.
+    own_blind = []
+    if latest is not None:
+        for s in sorted(set(held) | {r[0] for r in out["plans"]}):
+            if str(s).upper().startswith("MF:"):
+                continue  # NAV-priced, no candle bars — the panel says "n/a"
+            df = store.load(s)
+            if df is None or df.empty or \
+                    latest not in {ts.date() for ts in pd.DatetimeIndex(pd.to_datetime(df.index)).normalize()}:
+                own_blind.append(s)
+    if own_blind:
+        shown = ", ".join(own_blind[:5]) + (f" (+{len(own_blind) - 5} more)" if len(own_blind) > 5 else "")
         return {"level": "red",
-                "text": f"STOP — the newest market session has no price bar for {shown}. Until the "
-                        f"evening fetch runs, treat everything below as not yet measured."}
+                "text": f"STOP — the newest market session has no price bar for {shown}: a holding "
+                        f"or open-plan name is unmeasured, so its P&L and alerts are blind. Until the "
+                        f"evening fetch runs (or you remove a dead name), treat everything below as "
+                        f"not yet measured."}
+    # 2) the crowd — only a failed FETCH (many names missing) justifies a
+    # page-wide stop; a few halted/delisted names in the file go amber, named.
+    n_univ = (out["health"] or {}).get("symbols") or 0
+    if dead and (not n_univ or len(dead) > HOLDINGS_MISSING_RED * n_univ):
+        shown = ", ".join(sorted(dead)[:5]) + (f" (+{len(dead) - 5} more)" if len(dead) > 5 else "")
+        return {"level": "red",
+                "text": f"STOP — {len(dead)} of {n_univ} symbols have no price bar for the newest "
+                        f"session ({shown}). The evening fetch is failing: until it runs, treat "
+                        f"everything below as not yet measured."}
     reg = out.get("regime")
     if not reg or not reg.get("label"):
         return {"level": "amber",
@@ -529,6 +622,18 @@ def _moves(store, log, idx, out: dict, held) -> list[dict]:
                        "The daily fetch did not refresh them (delisting, ticker change, or a flaky "
                        "hour at the exchange). The heatmap shows exactly which.",
                        "indtrader fetch-universe --file data/universe.txt   (then re-run health)"))
+    dead_small = (out["health"] or {}).get("latest_missing") or []
+    n_univ = (out["health"] or {}).get("symbols") or 0
+    if dead_small and n_univ and len(dead_small) <= HOLDINGS_MISSING_RED * n_univ:
+        # the verdict stayed amber at this size — the card names the few so
+        # "a few missing" never silently becomes "nothing missing"
+        M.append(_move("amber", f"{len(dead_small)} of {n_univ} names have no bar for the newest "
+                                "session (below the stop threshold)",
+                       f"{', '.join(dead_small[:8])}{' …' if len(dead_small) > 8 else ''} — likely "
+                       "halted or delisted but still in the universe file. Not page-stopping, but "
+                       "their scan row and any P&L on them are blind tonight.",
+                       "remove the dead names from data/universe.txt, or fetch-universe if they "
+                       "should have data"))
     return M
 
 
@@ -583,7 +688,8 @@ def _flagged_news(store, days: int = 3, cap: int = 30) -> tuple[list, str]:
 def make_handler(store_factory, log_factory, universe):
     """Takes zero-arg factories, not connections: a request may be served on any
     thread and sqlite connections are thread-bound, so each request opens its own
-    and closes it on the way out. Read-only throughout — no write path exists here."""
+    and closes it on the way out. The ONE write path is POST /api/journal — a
+    journal entry for a fill the human already executed; no order path exists."""
     class H(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 (stdlib API)
             if self.path == "/":
@@ -604,6 +710,48 @@ def make_handler(store_factory, log_factory, universe):
             data = body.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_POST(self):  # noqa: N802 (stdlib API)
+            """ONE write path: record a human-confirmed BUY fill into the SAME
+            journal `indtrader fill` writes (never an order — there is no broker
+            call anywhere in this process). Every validation refusal answers 400
+            with its own words; anything that is not the journal route answers 404
+            — no undiscovered write surface."""
+            if self.path != "/api/journal":
+                self.send_error(404)
+                return
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                payload = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+            except (ValueError, UnicodeDecodeError):
+                self._json(400, {"ok": False, "error": "body must be a JSON object"})
+                return
+            if not isinstance(payload, dict):
+                self._json(400, {"ok": False, "error": "body must be a JSON object"})
+                return
+            from indtrader.alerts.holdings import record_holding
+
+            log = log_factory()
+            # shared-cache sqlite connections tolerate cross-thread use, and the
+            # write is a single row — same per-request pattern as do_GET.
+            try:
+                fid = record_holding(log, payload.get("symbol"), payload.get("qty"),
+                                     payload.get("price"), dt=payload.get("dt") or None,
+                                     costs=payload.get("costs") or 0.0,
+                                     note=str(payload.get("note") or ""))
+                self._json(200, {"ok": True, "id": fid})
+            except ValueError as e:  # every refusal names itself — the form shows it verbatim
+                self._json(400, {"ok": False, "error": str(e)})
+            finally:
+                log.close()
+
+        def _json(self, code: int, obj: dict):
+            data = json.dumps(obj).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)

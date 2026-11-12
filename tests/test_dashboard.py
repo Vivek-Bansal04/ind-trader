@@ -187,7 +187,10 @@ def test_verdict_and_moves_words(seeded):
 
 def test_verdict_stops_on_index_staleness(seeded):
     """Data truth outranks the market light: advice measured on old bars is not
-    advice, and the page must SAY stop before it says anything else."""
+    advice, and the page must SAY stop before it says anything else. (The
+    fixture's TATA misses the newest session too — since the 2026-11-12
+    threshold rule a missing HOLDING is independently red; this test pins the
+    INDEX-staleness wording, which fires first.)"""
     store, log = seeded
 
     old = pd.bdate_range(end="2026-08-03", periods=30)
@@ -329,6 +332,68 @@ def test_serve_prefers_universe_file(tmp_path, monkeypatch):
     assert wb.serve(port=0) == 0
     assert len(seen["universe"]) == 10                    # labeled built-in default fallback
     get_settings.cache_clear()
+
+
+# ---- verdict thresholds (operator rule 2026-11-12): whose money does a miss blind?
+
+def _stale_one(store, sym, n=25):
+    """Re-seed `sym`'s bars ending ~1 week before the fixture's index calendar."""
+    old = pd.bdate_range(end=pd.Timestamp(_last_settled()) - pd.offsets.BDay(5), periods=n)
+    store.con.execute("DELETE FROM candles WHERE symbol=?", [sym])
+    store.upsert_candles(sym, "daily",
+                         pd.DataFrame({"open": 100, "high": 101, "low": 99,
+                                       "close": 100, "volume": 1e5}, index=old), "test")
+
+
+def test_few_universe_misses_are_amber_not_red(seeded):
+    """One delisted junk name out of hundreds must NOT turn the page STOP — the
+    always-red warning is the round-6 'EMPTY: 499 symbols' failure reborn."""
+    store, log = seeded
+    # 40 healthy names + 1 (GONE) whose bars stop 3 sessions early = 1/41 ≈ 2.4%
+    uni = ["GONE"] + [f"OK{i}" for i in range(1, 41)]
+    store.upsert_candles("GONE", "daily",
+                         pd.DataFrame({"open": 50, "high": 51, "low": 49, "close": 50,
+                                       "volume": 1e5},
+                                      index=pd.bdate_range(end=_last_settled(), periods=25)
+                                      - pd.offsets.BDay(3)), "test")
+    for i in range(1, 41):
+        store.upsert_candles(f"OK{i}", "daily",
+                             pd.DataFrame({"open": 50, "high": 51, "low": 49, "close": 50,
+                                           "volume": 1e5},
+                                          index=pd.bdate_range(end=_last_settled(), periods=25)), "test")
+    snap = snapshot(store, log, uni)
+    assert len(snap["health"]["latest_missing"]) == 1        # only GONE
+    assert snap["verdict"]["level"] != "red", snap["verdict"]
+    assert any("no bar for the newest" in m["title"] and "GONE" in m["body"]
+               for m in snap["moves"]), [m["title"] for m in snap["moves"]]
+
+
+def test_widespread_universe_misses_are_red(seeded):
+    """> 10% of the universe missing = the FETCH is failing — page-wide STOP."""
+    store, log = seeded
+    uni = []
+    for i in range(10):
+        s = f"BAD{i}"
+        uni.append(s)
+        store.upsert_candles(s, "daily",
+                             pd.DataFrame({"open": 50, "high": 51, "low": 49, "close": 50,
+                                           "volume": 1e5},
+                                          index=pd.bdate_range(end=_last_settled(), periods=25)
+                                          - pd.offsets.BDay(3)), "test")
+    snap = snapshot(store, log, uni)
+    assert len(snap["health"]["latest_missing"]) == 10
+    assert snap["verdict"]["level"] == "red"
+    assert "10 of 10" in snap["verdict"]["text"] and "fetch is failing" in snap["verdict"]["text"]
+
+
+def test_missing_bar_on_a_holding_is_red_even_outside_the_universe(seeded):
+    """A holding absent from universe.txt cannot hide behind the 10% rule —
+    the check reads the bars themselves, and YOUR name missing is always loud."""
+    store, log = seeded                      # fixture holds TATA (fill, no executed plan)
+    _stale_one(store, "TATA")
+    snap = snapshot(store, log, [])          # empty universe: heatmap never sees TATA
+    assert snap["verdict"]["level"] == "red"
+    assert "TATA" in snap["verdict"]["text"] and "unmeasured" in snap["verdict"]["text"]
 
 
 def test_sparkline_svg_rules():
