@@ -20,7 +20,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 # NSE as primary data source (GPL library kept as an arm's-length dependency):
-nse = ["NseIndiaApi>=5"]
+# Published as 'nse' on PyPI (github.com/BennyThadikaran/NseIndiaApi).
+nse = ["nse>=5"]
 # Chrome-impersonation transport for news/calendar — the ONLY transport that
 # clears the laptop-network WAF (round-5: plain urllib got 403 there, curl_cffi
 # returned 100 items). The Docker image installs this so a container behaves

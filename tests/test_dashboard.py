@@ -121,8 +121,6 @@ def test_ledger_sections_and_heatmap(seeded):
     from indtrader.data.macrocal import ensure as cal_ensure
 
     cal_ensure(store)
-    # dispute = holiday row on a day WITH a NIFTY bar (fixture's own last session);
-    # genuine = a future weekday no bar can exist for. Both date-independent.
     store.con.execute("INSERT INTO calendar_events VALUES (?,'master',0,'fake drift','{}','now')",
                       [_last_settled()])
     store.con.execute("INSERT INTO calendar_events VALUES ('2099-01-05','master',0,'real holiday','{}','now')")

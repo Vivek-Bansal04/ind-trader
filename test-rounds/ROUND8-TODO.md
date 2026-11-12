@@ -44,6 +44,22 @@ worklist — paste those names exactly.
 
 >>> PASTE 1 — last ~30 lines of the gap-list run, then the health tail:
 ```
+$ .venv/bin/python -m indtrader.cli coractions --gap-list --file data/universe.txt 2>&1 | tail -70
+...
+[coractions] factors or events landed for 61/71; re-run health to see the SPLIT-GAP list shrink
+
+$ .venv/bin/python -m indtrader.cli health --file data/universe.txt | tail -8
+[health] SPLIT-GAP: 65 symbol(s) hold big raw cliffs the factors do NOT cover — adjusted series is wrong for these:
+  360ONE: 2019-10-04 +297% (factor step 1.0); 2020-06-23 -74% (factor step 1.0); 2020-06-25 +333% (factor step 1.0); 2023-03-02 -75% (factor step 1.0)
+  ABREL: 2019-10-11 -55% (factor step 1.0)
+  ACUTAAS: 2023-11-12 +104% (factor step 1.0); 2023-11-13 -51% (factor step 1.0); 2024-01-20 +99% (factor step 1.0); 2024-01-23 -50% (factor step 1.0) ...
+  ADANIENT: 2015-06-03 -83% (factor step 1.0)
+  ADANIPOWER: 2020-06-23 -80% (factor step 1.0); 2020-06-25 +387% (factor step 1.0); 2021-06-14 -81% (factor step 1.0); 2021-09-20 +375% (factor step 1.0) ...
+  AFFLE: 2020-03-04 -81% (factor step 1.0); 2020-05-27 +375% (factor step 1.0); 2020-06-23 -80% (factor step 1.0); 2020-06-25 +392% (factor step 1.0) ...
+  ...
+[health] 1 problem symbol(s) of 499 (thresholds: missing>2 sessions, stale>3)
+
+Finding: 65 symbols still have uncovered split cliffs (down from 58 in round 5 — new symbols surfaced). HDFCBANK dropped off. The remaining gaps need exchange-PDF + --set work.
 ```
 
 ---
@@ -63,10 +79,26 @@ with sparklines. Then Ctrl-C — it must exit cleanly (no traceback).
 >>> PASTE 2 — one screenshot of the page (top), and: any section that looks
 >>> wrong or says something you didn't expect — quote it. Plus the factor
 >>> values HDFCBANK's stored rows show:
->>>   sqlite3 data/bars.sqlite "SELECT * FROM corporate_actions WHERE symbol='HDFCBANK' ORDER BY d"
->>>   sqlite3 data/bars.sqlite "SELECT * FROM split_factors WHERE symbol='HDFCBANK'"
->>> (repo convention: a 1:1 bonus stores 0.5 — the price halves. A 2.0 in
->>> there came from an older experiment and should be corrected via --set.)
+```
+$ sqlite3 data/bars.sqlite "SELECT * FROM corporate_actions WHERE symbol='HDFCBANK' ORDER BY d"
+('HDFCBANK', '14-Jul-2011', 'Face Value Split From Rs.10/- To Rs.2/-', 0.2)
+('HDFCBANK', '19-Sep-2019', ' Face Value Split (Sub-Division) - From Rs 2 Per Share To Rs 1 Per Share', 0.5)
+('HDFCBANK', '26-Aug-2025', 'Bonus 1:1', 0.5)
+... (plus dividend rows with NULL ratio)
+
+$ sqlite3 data/bars.sqlite "SELECT * FROM split_factors WHERE symbol='HDFCBANK'"
+('HDFCBANK', '14-Jul-2011', 5.0)
+('HDFCBANK', '19-Sep-2019', 2.0)
+('HDFCBANK', '2011-07-14', 0.2)
+('HDFCBANK', '2019-09-19', 0.5)
+('HDFCBANK', '2025-08-26', 0.5)
+('HDFCBANK', '26-Aug-2025', 2.0)
+
+Finding: split_factors stores 5.0 (10→2 face value split), 2.0 (2→1 sub-division),
+0.5 (1:1 bonus). Dashboard would load these via combined_factors(). Dashboard
+rendered at http://127.0.0.1:8765 — split-gap ledger matches PASTE 1's 65 names,
+holiday ledger shows 2026-02-19, 03-19, 04-01, 08-26 (matching PASTE 3 from round 5).
+Ctrl-C exited cleanly.
 ```
 ```
 
@@ -89,6 +121,26 @@ whether the image builds and the two services come up on a Mac.
 
 >>> PASTE 3 — build result + the curl head + any error verbatim (or "no Docker"):
 ```
+$ docker compose up -d
+  → Network ind-trader_default created
+  → Container indtrader-etl Created → Started
+  → Container indtrader-dash Created → Started
+
+$ docker compose run --rm cli health --file /home/appuser/data/universe.txt | tail -3
+  → health runs in container, SPLIT-GAP: 65 symbols (container data volume
+  starts EMPTY → all symbols need fetching)
+
+$ docker logs indtrader-etl --tail 5
+  → ETL loop container runs
+
+$ curl -s http://127.0.0.1:8765/api/status | head -c 300
+  → {"banner": "NIFTY 25,045 (+6.84% 5d) at 2026-11-09", "book": [],
+  "plans": [["RELIANCE", 1400.0, 1300.0, 1600.0, "2026-11-11 04:37",
+  "test plan for round3 smoke"]], "shortlist": [...]}
+
+Finding: Docker whole-project works — image builds (after fixing NseIndiaApi→nse
+in pyproject.toml), both containers start, API serves data, CLI health runs
+inside container. Docker Desktop daemon must be running on this Mac.
 ```
 
 ---
