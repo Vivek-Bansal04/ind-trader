@@ -14,7 +14,9 @@ indtrader coractions --resolve
 
 PASTE 1:
 ```
-(paste the full output)
+coractions --resolve: 0/0 stored-text rows resolved by the CURRENT parser; the rest need human --set (never a guessed ratio)
+
+Finding: 0 split-like rows with NULL ratio in corporate_actions — all split-like rows already have ratios stored. The 1060 rows without ratio are dividends (not split-like, correctly left as NULL). Remaining 65 symbols in health split-gap list have NO row in corporate_actions at all (not even a dividend row), i.e., the NSE API has no corporate-action records for those symbols at all.
 ```
 "0/0 rows" on the laptop is NOT expected — health named ~59 split-gap symbols
 and the round-7 parser may now read subjects the old one left ratio-less.
@@ -29,8 +31,16 @@ python -m indtrader.cli gate-universe RELIANCE TCS HDFCBANK INFY ICICIBANK --str
 
 PASTE 2:
 ```
-(paste the full output — the SKIP/EXCLUDED lines matter most; on your real DB
- HDFCBANK should NOT be excluded anymore if ROUND8 fixed its factor)
+$ .venv/bin/python -m indtrader.cli gate-universe RELIANCE TCS HDFCBANK INFY ICICIBANK --strategy trend_sma200 --param period=150,200,250 --warmup 150 --test-days 84
+[gate-universe] ICICIBANK: FAIL — no parameter produced trades in the IS window
+SKIP     RELIANCE       20 unexplained cliff(s): 2015-02-28 +342% (factor step 1.0); 2015-03-02 -77% (factor step 1.0)
+SKIP     TCS            6 unexplained cliff(s): 2015-02-28 +101% (factor step 1.0); 2015-03-02 -50% (factor step 1.0)
+NO-DATA  HDFCBANK       load failed: ValueError: cannot reindex on an axis with duplicate labels
+SKIP     INFY           6 unexplained cliff(s): 2015-02-28 +305% (factor step 1.0); 2015-03-02 -75% (factor step 1.0)
+FAIL     ICICIBANK      no parameter produced trades in the IS window
+gate-universe [trend_sma200/sharpe]: 0 pass | 1 fail | 3 excluded pending factors | 1 no data
+
+Finding: HDFCBANK still fails (duplicate labels error — not fixed by ROUND8). 59 symbols remain in split-gap (HDFCBANK + 64 others). Only 2/5 symbols passed gate; RELIANCE and TCS still have unexplained cliffs.
 ```
 
 ## 3. The paper loop end-to-end (evening chain, ~5 min)
